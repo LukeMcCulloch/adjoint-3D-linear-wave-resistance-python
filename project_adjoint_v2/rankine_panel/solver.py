@@ -335,8 +335,11 @@ class RankineWaveResistanceSolver:
         
         # Fast vtotal from stored vel
         # vtotal = -vinf + sum_j sigma[j] * vel[:,j,:]
-        #vtotal = -vinf[None, :] + np.einsum("ijm,j->im", vel, sigma)
-        vtotal = -vinf[None,:] + np.einsum("ijm,j->im", vel, sigma)
+        vtotal = -vinf[None, :] + np.einsum("ijm,j->im", vel, sigma)
+        # vinf has shape (3,)
+        # vtotal has shape (N, 3)
+        # vel has shape (N, N, 3)
+        # sigma has shape (N,)
         
         # Now vn/vt/cp/zeta/force/cw exactly as before (vectorized)
         normals = coordsys[:, :, 2]
@@ -375,7 +378,7 @@ class RankineWaveResistanceSolver:
 
         # reference area S (wetted area) used in cw denom
         S = float(np.sum(geom.area[:npanels][center[:npanels, 2] < 0.0]))
-        cw = -force[0] / (0.5 * self.params.rho_ref * (U**2) * S)
+        cw = -force[0] / (0.5 * self.params.rho_ref * (U**2) * S) #this will become out objective function!
 
         return FlowResult(
             sigma=sigma, vtotal=vtotal, vn=vn, vt1=vt1, vt2=vt2,
