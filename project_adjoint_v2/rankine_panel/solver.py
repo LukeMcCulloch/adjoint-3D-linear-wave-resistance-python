@@ -17,6 +17,8 @@ from .influence import hs_influence, phixx_influence
 from .numba_kernels import _require_numba, assemble_A_b_vel_nb
 #from .numba_kernels import assemble_A_b_vel_nb
 from .slae import solve_simqit
+# ADJOINT
+from .objectives import compute_dJ_dsigma_cw
 '''
 not from rankine_panel.numba_kernels ... 
 (relative imports are more robust when people run scripts in different ways).
@@ -269,7 +271,7 @@ class RankineWaveResistanceSolver:
         """
         npanels = pf.npanels
         nfspanels = pf.nfspanels
-        N = pf.N
+        N = pf.N #self.npanels + self.nfspanels
 
         vinf = self.vinf_from_Fr(Fr)
         g = self.params.gravity
@@ -306,7 +308,7 @@ class RankineWaveResistanceSolver:
         
 
         #
-        # END SOLVE
+        # END FORWARD SOLVE
         #-------------------------------
         N = pf.N
         
@@ -341,10 +343,12 @@ class RankineWaveResistanceSolver:
         # vel has shape (N, N, 3)
         # sigma has shape (N,)
         
+        
         # Now vn/vt/cp/zeta/force/cw exactly as before (vectorized)
         normals = coordsys[:, :, 2]
         t1 = coordsys[:, :, 0]
         t2 = coordsys[:, :, 1]
+        
         
         vn  = np.einsum("ij,ij->i", normals, vtotal)
         vt1 = np.einsum("ij,ij->i", t1, vtotal)
@@ -370,6 +374,11 @@ class RankineWaveResistanceSolver:
         # forces on hull (my fortran code uses rho=1025 for force)
         rho = self.params.rho_water
         force = np.zeros(3, dtype=float)
+        
+        #Adjoint
+        dJ_dsigma = compute_dJ_dsigma_cw(
+                    vel, vtotal, normals, area, center,
+                    npanels, vinf, rho_water=rho, rho_ref=rho)
 
         for i in range(npanels):
             if center[i, 2] < 0.0:
@@ -378,7 +387,7 @@ class RankineWaveResistanceSolver:
 
         # reference area S (wetted area) used in cw denom
         S = float(np.sum(geom.area[:npanels][center[:npanels, 2] < 0.0]))
-        cw = -force[0] / (0.5 * self.params.rho_ref * (U**2) * S) #this will become out objective function!
+        cw = -force[0] / (0.5 * self.params.rho_ref * (U**2) * S) #this will become our objective function!
 
         return FlowResult(
             sigma=sigma, vtotal=vtotal, vn=vn, vt1=vt1, vt2=vt2,

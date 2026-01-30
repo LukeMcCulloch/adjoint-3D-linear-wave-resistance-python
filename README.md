@@ -82,10 +82,11 @@ where:
 ## Objective definition in our discretization
 
 
+* code review:  
 
 We store the induced velocity tensor:
 
-- `vel[i, j, m]` = the $m$-th component of the velocity at fieldpoint/panel $i$ induced by a **unit** source strength on panel $j$.
+ `vel[i, j, m]` = the $m$-th component of the velocity at fieldpoint/panel $i$ induced by a **unit** source strength on panel $j$.
 
 We compute:
 
@@ -163,9 +164,13 @@ $$
 
 That’s the discrete objective we differentiate.
 
+In python, we had:
 
+```python
+    cw = -force[0] / (0.5 * self.params.rho_ref * (U**2) * S) #this will become our objective function!
+```
 
-## First adjoint target: compute $\partial J / \partial \sigma$
+## First adjoint target: compute $\mathbf{g} = \partial J / \partial \sigma$
 
 We’ll compute
 
@@ -189,7 +194,7 @@ p_i
 = \frac{1}{2}\rho U^2 - \frac{1}{2}\rho \lVert \mathbf{v}_i \rVert^2 - \rho g z_i.
 $$
 
-Partial of pressure with respect to $\mathbf{v}_i$:
+So we take the partial of pressure with respect to $\mathbf{v}_i$:
 
 $$
 \frac{\partial p_i}{\partial \mathbf{v}_i} = -\rho\,\mathbf{v}_i.
@@ -244,10 +249,34 @@ $$
 
 That’s the vector $\mathbf{g}$ we need.
 
+$$ \mathbf{g} = \frac{\partial J}{\partial \sigma_j}$$
+
+
+So its components are
+
+$$
+g_j = \frac{\partial J}{\partial \sigma_j}, \qquad j = 1,\dots,N.
+$$
+
+And it’s exactly the right-hand side for the discrete adjoint solve that we used LU decomposition to setup:
+
+$$
+A^T \boldsymbol{\lambda} = \mathbf{g}.
+$$
 
 
 
+## 3) Code: compute $\frac{\partial J}{\partial \sigma_j}$ ```python dJ_dsigma ``` from your existing arrays
 
+Assuming:
+
+- `vel` is shape `(N, N, 3)`
+- `vtotal` is shape `(N, 3)`
+- `normals` is shape `(N, 3)`
+- `area` is shape `(N,)`
+- `center` is shape `(N, 3)`
+- `vinf[0] = U`
+- `npanels` is the hull panel count
 
 
 
