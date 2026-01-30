@@ -18,32 +18,31 @@ This section documents the first “adjoint-ready” refactor: switching the for
 Our forward (state) solve is a dense linear system coming from the Rankine-source BEM discretization:
 
 
-\[
+$$
 A\,\sigma = b
-\]
+$$
 
 
 
+- $A \in \mathbb{R}^{N\times N}$ is the influence matrix assembled from the hull and free-surface boundary conditions.
+- $\sigma \in \mathbb{R}^{N}$ are the source strengths (unknowns).
+- $b \in \mathbb{R}^{N}$ is the RHS enforcing hull no-penetration and the free-surface condition.
 
-- \(A \in \mathbb{R}^{N\times N}\) is the influence matrix assembled from the hull and free-surface boundary conditions.
-- \(\sigma \in \mathbb{R}^{N}\) are the source strengths (unknowns).
-- \(b \in \mathbb{R}^{N}\) is the RHS enforcing hull no-penetration and the free-surface condition.
-
-The matrix is **non-symmetric**, so \(A^T\) is not interchangeable with \(A\).
+The matrix is **non-symmetric**, so $A^T$ is not interchangeable with $A$.
 
 ---
 
 ### Why LU Factorization?
 
-A dense solve (e.g. `scipy.linalg.solve`) works, but for adjoints and optimization we will solve *multiple* systems with the same matrix $\begin{bmatrix} A \end{bmatrix}$. \[A\]
+A dense solve (e.g. `scipy.linalg.solve`) works, but for adjoints and optimization we will solve *multiple* systems with the same matrix $\begin{bmatrix} A \end{bmatrix}$. $$A$$
 
 
 LU factorization gives us:
 
 - One-time factorization cost: `lu_factor(A)`
 - Fast repeated solves:
-  - forward: solve \(A\,\sigma = b\)
-  - adjoint: solve \(A^T\,\lambda = \frac{\partial J}{\partial \sigma}\)
+  - forward: solve $A\,\sigma = b$
+  - adjoint: solve $A^T\,\lambda = \frac{\partial J}{\partial \sigma}$
 
 ---
 
@@ -64,5 +63,6 @@ sigma   = lu_solve((lu, piv), b)  # solves A * sigma = b  (trans=0 default)
 ## requirements
 * numpy, scipy, matplotlib
 * numba
-* Mathpix Markdown to render the more latex math in this readme in Visual Studio Code.
-    *Here we adopt the github subset for maximal compatibility
+* Optional: Mathpix Markdown ? to render the more latex math 
+    * Here we adopt the github subset for maximal compatibility
+    * so you do not need it
