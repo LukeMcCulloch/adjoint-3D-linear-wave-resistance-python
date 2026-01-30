@@ -64,5 +64,5 @@ sigma   = lu_solve((lu, piv), b)  # solves A * sigma = b  (trans=0 default)
 ## requirements
 * numpy, scipy, matplotlib
 * numba
-
-Mathpix Markdown to render the math in this readme in Visual Studio Code
+* Mathpix Markdown to render the more latex math in this readme in Visual Studio Code.
+    *Here we adopt the github subset for maximal compatibility
