@@ -18,7 +18,7 @@ from .numba_kernels import _require_numba, assemble_A_b_vel_nb
 #from .numba_kernels import assemble_A_b_vel_nb
 from .slae import solve_simqit
 # ADJOINT
-from .objectives import Objectives #compute_dJ_dsigma_cw, compute_dJ_dsigma_JnegFx
+from .objectives import SourceStrengthGradients, ShapeGradients
 from .gradient_validators import Validate_dj_dsigma
 '''
 not from rankine_panel.numba_kernels ... 
@@ -395,7 +395,7 @@ class RankineWaveResistanceSolver:
         #             rho_water = rho_water, 
         #             rho_ref = self.params.rho_ref)
         
-        dJ_dsigma = Objectives.compute_dJ_dsigma_JnegFx(
+        dJ_dsigma = SourceStrengthGradients.compute_dJ_dsigma_JnegFx(
             vel=vel, vtotal=vtotal,
             normals=normals,
             area=area,
@@ -433,7 +433,7 @@ class RankineWaveResistanceSolver:
             vel, vinf, coordsys, area, center, npanels, rho_water, gravity
         )
         
-        dJnegFx_dsigma = Objectives.compute_dJ_dsigma_JnegFx(
+        dJnegFx_dsigma = SourceStrengthGradients.compute_dJ_dsigma_JnegFx(
             vel=vel, vtotal=vtotal,
             normals=normals,
             area=area,

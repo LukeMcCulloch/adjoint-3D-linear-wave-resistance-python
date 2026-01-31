@@ -30,6 +30,8 @@ from rankine_panel import read_panel_file, RankineWaveResistanceSolver, FlowPara
 from rankine_panel.vtkio import write_vtp_polydata_cell_scalar
 from rankine_panel.report import append_output_dat
 
+#from rankine_panel.gradient_validators import check_shape_grad_beam_scale
+
 #print("rankine_panel loaded from:", os.path.abspath(rankine_panel.__file__))
 
 
@@ -60,6 +62,16 @@ def usage():
 #         pf = read_panel_file("fifi.dat")
 
 def main(arg_string: str | None = None):
+    '''
+        arg_string = "fifi.dat jan2026out 0.3" 
+    
+        argv = ["run_wigley.py"] + shlex.split(arg_string)
+        
+        inputfile = argv[1]
+        out_handle = argv[2]
+        Fr = float(argv[3])
+       
+    '''
     # If called with a single string, treat it like a shell command line
     if arg_string is not None:
         argv = ["run_wigley.py"] + shlex.split(arg_string)

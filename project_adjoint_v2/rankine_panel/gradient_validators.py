@@ -9,39 +9,41 @@ import numpy as np
 
 from scipy.linalg import lu_factor, lu_solve
 
+from .objectives import SourceStrengthGradients
+
 
 class Validate_dj_dsigma(object):
     
     
-    @staticmethod
-    def compute_dJ_dsigma_JnegFx(
-        vel: np.ndarray,        # (N, N, 3)
-        vtotal: np.ndarray,     # (N, 3)
-        normals: np.ndarray,    # (N, 3)
-        area: np.ndarray,       # (N,)
-        center: np.ndarray,     # (N, 3)
-        npanels: int,
-        rho_water: float,) -> np.ndarray:
+    # @staticmethod
+    # def compute_dJ_dsigma_JnegFx(
+    #     vel: np.ndarray,        # (N, N, 3)
+    #     vtotal: np.ndarray,     # (N, 3)
+    #     normals: np.ndarray,    # (N, 3)
+    #     area: np.ndarray,       # (N,)
+    #     center: np.ndarray,     # (N, 3)
+    #     npanels: int,
+    #     rho_water: float,) -> np.ndarray:
         
-        """
-        Analytic dJ/dsigma for J = -F_x.
+    #     """
+    #     Analytic dJ/dsigma for J = -F_x.
 
-        With your force definition, for wetted hull panels:
-          dJ/dv_i = -rho * area_i * n_ix * v_i
-        and dJ/dsigma_j = sum_i (dJ/dv_i)·vel[i,j]
-        """
-        N = vel.shape[0]
-        wetted = center[:npanels, 2] < 0.0
+    #     With your force definition, for wetted hull panels:
+    #       dJ/dv_i = -rho * area_i * n_ix * v_i
+    #     and dJ/dsigma_j = sum_i (dJ/dv_i)·vel[i,j]
+    #     """
+    #     N = vel.shape[0]
+    #     wetted = center[:npanels, 2] < 0.0
 
-        dJ_dv = np.zeros((N, 3), dtype=np.float64)
+    #     dJ_dv = np.zeros((N, 3), dtype=np.float64)
 
-        scale = np.zeros(npanels, dtype=np.float64)
-        scale[wetted] = rho_water * area[:npanels][wetted] * normals[:npanels, 0][wetted]
+    #     scale = np.zeros(npanels, dtype=np.float64)
+    #     scale[wetted] = rho_water * area[:npanels][wetted] * normals[:npanels, 0][wetted]
 
-        dJ_dv[:npanels, :] = scale[:, None] * vtotal[:npanels, :]
+    #     dJ_dv[:npanels, :] = scale[:, None] * vtotal[:npanels, :]
 
-        dJ_dsigma = np.einsum("ik,ijk->j", dJ_dv, vel)
-        return dJ_dsigma
+    #     dJ_dsigma = np.einsum("ik,ijk->j", dJ_dv, vel)
+    #     return dJ_dsigma
 
     @staticmethod
     def make_postprocess_JnegFx(
@@ -115,60 +117,221 @@ class Validate_dj_dsigma(object):
             print(f"  test {t+1:02d}: fd={fd:+.6e}  an={an:+.6e}  abs={abs_err:.3e}  rel={rel_err:.3e}")
             
             
+            
+            
 
 class Validate_shape_gradient(object):
     
     
-    def check_shape_grad_beam_scale(pf, points0, Fr, params, numba_assemble,
-                                    eps_m=1e-5, m0=0.0):
+    
+    @staticmethod
+    def hull_vertex_indices(panels4xN: np.ndarray, npanels: int) -> np.ndarray:
+        """Unique vertex ids used by hull panels only."""
+        return np.unique(panels4xN[:, :npanels].ravel())
+    
+    
+    @staticmethod
+    def apply_beam_scale(points0: np.ndarray,
+                         hull_verts: np.ndarray,
+                         m: float,
+                         z_cut: float = 0.0) -> np.ndarray:
         """
+        Beam scaling mode on hull vertices:
+          y <- y*(1+m) for vertices with z < z_cut
+        """
+        pts = points0.copy()
+        idx = hull_verts
+        mask = pts[2, idx] < z_cut
+        idx2 = idx[mask]
+        pts[1, idx2] *= (1.0 + m)
+        return pts
+    
+    
+    @staticmethod
+    def assemble_from_points(points: np.ndarray,
+                             pf,
+                             Fr: float,
+                             params,
+                             panel_geometry_all,
+                             assemble_A_b_vel_nb):
+        """
+        Assemble A,b,vel (and return geometry caches) from raw points/panels.
+        Returns:
+          A: (N,N), b: (N,), vel: (N,N,3),
+          vinf: (3,),
+          center: (N,3), coordsys: (N,3,3), area: (N,)
+        """
+        geom = panel_geometry_all(points, pf.panels)
+    
+        vinf = np.array([Fr*np.sqrt(params.length*params.gravity), 0.0, 0.0], dtype=np.float64)
+        gravity = float(params.gravity)
+    
+        center = geom.center.T.astype(np.float64)                      # (N,3)
+        coordsys = np.moveaxis(geom.coordsys, 2, 0).astype(np.float64) # (N,3,3)
+        cornerslocal = np.moveaxis(geom.cornerslocal, 2, 0).astype(np.float64)  # (N,2,4)
+        area = geom.area.astype(np.float64)
+    
+        A, b, vel = assemble_A_b_vel_nb(center, coordsys, cornerslocal, area,
+                                        pf.npanels, pf.nfspanels, pf.deltax,
+                                        vinf[0], gravity)
+    
+        return A, b, vel, vinf, center, coordsys, area
+    
+    
+    @staticmethod
+    def check_shape_grad_beam_scale(
+        pf,
+        points0: np.ndarray,
+        Fr: float,
+        params,
+        panel_geometry_all,
+        assemble_A_b_vel_nb,
+        Objectives,
+        Validate_dj_dsigma,
+        eps_m: float = 1e-5,
+        m0: float = 0.0,
+        z_cut: float = 0.0
+    ):
+        """
+        Shape-gradient check for one parameter m (beam scaling).
+        Objective is J = -Fx.
+    
         Compares:
-          FD: (J(m+e)-J(m-e))/(2e)
-          Adjoint: lam^T (b_m - A_m sigma)
+          FD full: (J(m+e)-J(m-e))/(2e)
+          Adjoint: lam^T (db/dm - (dA/dm) sigma)
     
-        Uses J = -Fx
+        Notes:
+          - This uses FD for dA/dm and db/dm ONLY as a validation harness.
+          - In production, you'll replace these with analytic derivatives.
         """
-        hull_verts = hull_vertex_indices(pf.panels, pf.npanels)
+        hull_verts = Validate_shape_gradient.hull_vertex_indices(pf.panels, pf.npanels)
     
-        # --- baseline assemble/solve ---
-        A, b, vel, vinf, center, coordsys, area = assemble_from_points(points0, pf, Fr, params, numba_assemble)
+        # ---------------- baseline ----------------
+        A, b, vel, vinf, center, coordsys, area = Validate_shape_gradient.assemble_from_points(
+            points0, pf, Fr, params, panel_geometry_all, assemble_A_b_vel_nb
+        )
+    
         lu, piv = lu_factor(A)
         sigma = lu_solve((lu, piv), b)
     
-        J0, vtotal0 = eval_JnegFx(vel, vinf, coordsys, area, center, pf.npanels, params.rho_water, params.gravity, sigma)
+        vtotal = -vinf[None, :] + np.einsum("ijm,j->im", vel, sigma)
+        normals = coordsys[:, :, 2]
     
-        dJ_dsigma = Validate_dj_dsigma.compute_dJ_dsigma_JnegFx(
-            vel=vel, vtotal=vtotal0, normals=coordsys[:, :, 2], area=area, center=center,
-            npanels=pf.npanels, rho_water=params.rho_water
+        rho = float(params.rho_water)
+        gravity = float(params.gravity)
+    
+        postprocess = Validate_dj_dsigma.make_postprocess_JnegFx(
+            vel, vinf, coordsys, area, center, pf.npanels, rho, gravity
         )
+        J0 = float(postprocess(sigma))
     
+        dJ_dsigma = SourceStrengthGradients.compute_dJ_dsigma_JnegFx(
+            vel=vel, vtotal=vtotal, normals=normals,
+            area=area, center=center, npanels=pf.npanels, rho_water=rho
+        )
         lam = lu_solve((lu, piv), dJ_dsigma, trans=1)
-        adj_relres = np.linalg.norm(A.T @ lam - dJ_dsigma) / (np.linalg.norm(dJ_dsigma) + 1e-30)
-        print("adjoint solve relres:", adj_relres)
     
-        # --- assemble at m+eps and m-eps ---
-        pts_p = apply_beam_scale(points0, hull_verts, m0 + eps_m)
-        Ap, bp, velp, vinfp, centerp, coordsyp, areap = assemble_from_points(pts_p, pf, Fr, params, numba_assemble)
+        adj_relres = np.linalg.norm(A.T @ lam - dJ_dsigma) / (np.linalg.norm(dJ_dsigma) + 1e-30)
+        print("\nAdjoint solve relres (J=-Fx):", adj_relres)
+    
+        # ---------------- plus ----------------
+        pts_p = Validate_shape_gradient.apply_beam_scale(points0, hull_verts, m0 + eps_m, z_cut=z_cut)
+        Ap, bp, velp, vinfp, centerp, coordsyp, areap = Validate_shape_gradient.assemble_from_points(
+            pts_p, pf, Fr, params, panel_geometry_all, assemble_A_b_vel_nb
+        )
         lup, pivp = lu_factor(Ap)
         sigmap = lu_solve((lup, pivp), bp)
-        Jp, _ = eval_JnegFx(velp, vinfp, coordsyp, areap, centerp, pf.npanels, params.rho_water, params.gravity, sigmap)
+        Jp = float(Validate_dj_dsigma.make_postprocess_JnegFx(
+            velp, vinfp, coordsyp, areap, centerp, pf.npanels, rho, gravity
+        )(sigmap))
     
-        pts_m = apply_beam_scale(points0, hull_verts, m0 - eps_m)
-        Am, bm, velm, vinfm, centerm, coordsym, aream = assemble_from_points(pts_m, pf, Fr, params, numba_assemble)
+        # ---------------- minus ----------------
+        pts_m = Validate_shape_gradient.apply_beam_scale(points0, hull_verts, m0 - eps_m, z_cut=z_cut)
+        Am, bm, velm, vinfm, centerm, coordsym, aream = Validate_shape_gradient.assemble_from_points(
+            pts_m, pf, Fr, params, panel_geometry_all, assemble_A_b_vel_nb
+        )
         lum, pivm = lu_factor(Am)
         sigmam = lu_solve((lum, pivm), bm)
-        Jm, _ = eval_JnegFx(velm, vinfm, coordsym, aream, centerm, pf.npanels, params.rho_water, params.gravity, sigmam)
+        Jm = float(Validate_dj_dsigma.make_postprocess_JnegFx(
+            velm, vinfm, coordsym, aream, centerm, pf.npanels, rho, gravity
+        )(sigmam))
     
         # FD gradient of full objective
         dJ_dm_fd = (Jp - Jm) / (2.0 * eps_m)
     
-        # operator FD for adjoint gradient (using baseline sigma, lam)
+        # Operator FD for adjoint formula
         dA_dm = (Ap - Am) / (2.0 * eps_m)
         db_dm = (bp - bm) / (2.0 * eps_m)
+    
         dJ_dm_adj = float(lam @ (db_dm - dA_dm @ sigma))
     
-        print("J0 =", J0)
-        print("dJ/dm FD     =", dJ_dm_fd)
-        print("dJ/dm adjoint=", dJ_dm_adj)
-        print("abs err      =", abs(dJ_dm_fd - dJ_dm_adj))
-        print("rel err      =", abs(dJ_dm_fd - dJ_dm_adj) / (abs(dJ_dm_fd) + 1e-30))
+        print("\nBeam scaling shape-gradient check (objective J=-Fx)")
+        print("  m0 =", m0, " eps_m =", eps_m, " z_cut =", z_cut)
+        print("  J0 =", J0)
+        print("  FD dJ/dm      =", dJ_dm_fd)
+        print("  adjoint dJ/dm =", dJ_dm_adj)
+        print("  abs err       =", abs(dJ_dm_fd - dJ_dm_adj))
+        print("  rel err       =", abs(dJ_dm_fd - dJ_dm_adj) / (abs(dJ_dm_fd) + 1e-30))
+    
+    
+    
+    
+    
+    ##########################
+    
+    
+    
+    # @staticmethod
+    # def check_shape_grad_beam_scale(pf, points0, Fr, params, numba_assemble,
+    #                                 eps_m=1e-5, m0=0.0):
+    #     """
+    #     Compares:
+    #       FD: (J(m+e)-J(m-e))/(2e)
+    #       Adjoint: lam^T (b_m - A_m sigma)
+    
+    #     Uses J = -Fx
+    #     """
+    #     hull_verts = hull_vertex_indices(pf.panels, pf.npanels)
+    
+    #     # --- baseline assemble/solve ---
+    #     A, b, vel, vinf, center, coordsys, area = assemble_from_points(points0, pf, Fr, params, numba_assemble)
+    #     lu, piv = lu_factor(A)
+    #     sigma = lu_solve((lu, piv), b)
+    
+    #     J0, vtotal0 = eval_JnegFx(vel, vinf, coordsys, area, center, pf.npanels, params.rho_water, params.gravity, sigma)
+    
+    #     dJ_dsigma = Validate_dj_dsigma.compute_dJ_dsigma_JnegFx(
+    #         vel=vel, vtotal=vtotal0, normals=coordsys[:, :, 2], area=area, center=center,
+    #         npanels=pf.npanels, rho_water=params.rho_water
+    #     )
+    
+    #     lam = lu_solve((lu, piv), dJ_dsigma, trans=1)
+    #     adj_relres = np.linalg.norm(A.T @ lam - dJ_dsigma) / (np.linalg.norm(dJ_dsigma) + 1e-30)
+    #     print("adjoint solve relres:", adj_relres)
+    
+    #     # --- assemble at m+eps and m-eps ---
+    #     pts_p = apply_beam_scale(points0, hull_verts, m0 + eps_m)
+    #     Ap, bp, velp, vinfp, centerp, coordsyp, areap = assemble_from_points(pts_p, pf, Fr, params, numba_assemble)
+    #     lup, pivp = lu_factor(Ap)
+    #     sigmap = lu_solve((lup, pivp), bp)
+    #     Jp, _ = eval_JnegFx(velp, vinfp, coordsyp, areap, centerp, pf.npanels, params.rho_water, params.gravity, sigmap)
+    
+    #     pts_m = apply_beam_scale(points0, hull_verts, m0 - eps_m)
+    #     Am, bm, velm, vinfm, centerm, coordsym, aream = assemble_from_points(pts_m, pf, Fr, params, numba_assemble)
+    #     lum, pivm = lu_factor(Am)
+    #     sigmam = lu_solve((lum, pivm), bm)
+    #     Jm, _ = eval_JnegFx(velm, vinfm, coordsym, aream, centerm, pf.npanels, params.rho_water, params.gravity, sigmam)
+    
+    #     # FD gradient of full objective
+    #     dJ_dm_fd = (Jp - Jm) / (2.0 * eps_m)
+    
+    #     # operator FD for adjoint gradient (using baseline sigma, lam)
+    #     dA_dm = (Ap - Am) / (2.0 * eps_m)
+    #     db_dm = (bp - bm) / (2.0 * eps_m)
+    #     dJ_dm_adj = float(lam @ (db_dm - dA_dm @ sigma))
+    
+    #     print("J0 =", J0)
+    #     print("dJ/dm FD     =", dJ_dm_fd)
+    #     print("dJ/dm adjoint=", dJ_dm_adj)
+    #     print("abs err      =", abs(dJ_dm_fd - dJ_dm_adj))
+    #     print("rel err      =", abs(dJ_dm_fd - dJ_dm_adj) / (abs(dJ_dm_fd) + 1e-30))

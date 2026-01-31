@@ -457,11 +457,78 @@ p_i = \frac{1}{2}\rho U^2 \;-\; \frac{1}{2}\rho \lVert v_i\rVert^2 \;-\; \rho g 
 $$
 
 
-## The Shape Gradient (TLM TODO)
 
 
 
-## Right Hand Sides
+
+## The Shape Gradient $\frac{\partial J}{\partial m}$
+
+
+Now we move from “adjoint w.r.t. $\sigma$” to “adjoint w.r.t. shape parameter $m$”.
+
+### The discrete shape gradient dependencies and initial formulation
+
+For one scalar design parameter $m$ (beam scale), with
+
+$$
+A(m)\,\sigma(m) = b(m),
+\qquad
+J(m) = J(\sigma(m), m),
+$$
+
+the total derivative is:
+
+$$
+\frac{dJ}{dm}
+=
+\frac{\partial J}{\partial m}
++
+\lambda^T\left(
+\frac{\partial b}{\partial m}
+-
+\frac{\partial A}{\partial m}\,\sigma
+\right).
+$$
+
+For $J = -F_x$, and for a first pass, you can treat $J$ as depending on geometry only through $\sigma$ (i.e., ignore explicit dependence of area/normals/centers inside the force). That gives the “adjoint-only” term:
+
+$$
+\frac{dJ}{dm}
+\approx
+\lambda^T\left(
+\frac{\partial b}{\partial m}
+-
+\frac{\partial A}{\partial m}\,\sigma
+\right).
+$$
+
+Later we’ll add the explicit $\partial J/\partial m$ from the force integration.
+
+
+
+### Beam Scaling - our first shape "function" - a shape "mode"
+
+Define:
+
+- For hull vertices with $z < 0$:
+  $$
+  y \leftarrow (1+m)\,y
+  $$
+
+- Leave free-surface points unchanged.
+- Leave the symmetry plane intact (so $y=0$ stays $y=0$).
+
+**Implementation detail:** clearly we should identify hull-used vertex indices from `panels[:, :npanels]` and only modify those vertices.
+
+
+
+
+
+
+
+
+
+## Adjoint $\frac{\partial J}{\partial \sigma}$ Right Hand Sides
 
 There are two different “RHS vectors” in play, and it’s easy to conflate them.
 
@@ -526,6 +593,10 @@ That means:
 
 **Important:** This is only “free scaling” for derivatives w.r.t. $\sigma$.
 For shape derivatives $d/dm$, $S$ *does* depend on geometry, so $c_w$’s shape gradient has extra terms.
+
+
+
+
 
 
 ## python package requirements
