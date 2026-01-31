@@ -33,7 +33,7 @@ class Validate_dj_dsigma(object):
         dJ_dv = np.zeros((N, 3), dtype=np.float64)
 
         scale = np.zeros(npanels, dtype=np.float64)
-        scale[wetted] = -rho_water * area[:npanels][wetted] * normals[:npanels, 0][wetted]
+        scale[wetted] = rho_water * area[:npanels][wetted] * normals[:npanels, 0][wetted]
 
         dJ_dv[:npanels, :] = scale[:, None] * vtotal[:npanels, :]
 

@@ -103,7 +103,7 @@ $$
 = -\mathbf{v}_\infty + \sum_{j=1}^N \sigma_j\,\mathbf{vel}_{ij}.
 $$
 
-<!-- (your NumPy: `vtotal = -vinf + einsum("ijm,j->im", vel, sigma)`) -->
+<!-- (our NumPy: `vtotal = -vinf + einsum("ijm,j->im", vel, sigma)`) -->
 
 ```python
 vtotal = -vinf[None, :] + np.einsum("ijm,j->im", vel, sigma)
@@ -280,7 +280,7 @@ $$
 
 
 
-## 3) Code: compute $\frac{\partial J}{\partial \sigma_j}$ code: ``` dJ_dsigma ``` from your existing arrays
+## 3) Code: compute $\frac{\partial J}{\partial \sigma_j}$ code: ``` dJ_dsigma ``` from our existing arrays
 
 Assuming:
 
@@ -334,7 +334,7 @@ $$
 
 ## 1) `compute_dJ_dsigma_JnegFx` (for $J = -F_x$)
 
-From your force definition, only wetted hull panels contribute. With
+From our force definition, only wetted hull panels contribute. With
 
 $$
 p_i
@@ -357,7 +357,7 @@ $$
 $$
 
 
-## 2) `check_dJ_dsigma()` — finite-difference check vs your `postprocess()`
+## 2) `check_dJ_dsigma()` — finite-difference check vs `postprocess()`
 
 This checks the directional derivative along a random direction $d\boldsymbol{\sigma}$:
 
@@ -367,9 +367,63 @@ $$
 \left(\frac{\partial J}{\partial \boldsymbol{\sigma}}\right)^T d\boldsymbol{\sigma}.
 $$
 
+
+
+## Development Notes
+
+### Sign of the adjoint term: $\frac{\partial J}{\partial \boldsymbol{\sigma}}$
+
+checking the objective:
+
+$$
+J = -F_x
+$$
+
+Your current derivation in code uses:
+
+$$
+\frac{\partial J}{\partial v_i} = -\rho\,A_i\,n_{ix}\,v_i
+$$
+
+But that expression is actually $\partial F_x/\partial v_i$, not $\partial(-F_x)/\partial v_i$.
+
+Let’s do it carefully:
+
+$$
+F_x = \sum_i A_i\,p_i\,n_{ix}
+$$
+
+$$
+p_i = \frac{1}{2}\rho U^2 \;-\; \frac{1}{2}\rho \lVert v_i\rVert^2 \;-\; \rho g z_i
+$$
+
+so
+
+$$
+\frac{\partial p_i}{\partial v_i} = -\rho\,v_i
+$$
+
+Therefore:
+
+$$
+\frac{\partial F_x}{\partial v_i}
+= A_i\,n_{ix}\,(-\rho\,v_i)
+= -\rho\,A_i\,n_{ix}\,v_i
+$$
+
+And then:
+
+$$
+\frac{\partial(-F_x)}{\partial v_i}
+= -\frac{\partial F_x}{\partial v_i}
+= +\rho\,A_i\,n_{ix}\,v_i
+$$
+
+So our scale needs to be **positive**, not negative.
+
 ### Requirements
 
-You provide a `postprocess(sigma)` callable that returns $J$ (and can compute from your cached `vel`, `coordsys`, etc.). It can return more too; we only use the objective scalar.
+You provide a `postprocess(sigma)` callable that returns $J$ (and can compute from the cached `vel`, `coordsys`, etc.). It can return more too; we only use the objective scalar.
 
 
 
