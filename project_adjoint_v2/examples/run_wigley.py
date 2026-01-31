@@ -2,7 +2,7 @@
 """
 Created on Wed Jan 14 22:40:34 2026
 
-@author: tluke
+@author: Luke McCulloch
 """
 
 # path modification to run the package code from here

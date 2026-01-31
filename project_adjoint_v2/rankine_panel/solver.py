@@ -19,6 +19,7 @@ from .numba_kernels import _require_numba, assemble_A_b_vel_nb
 from .slae import solve_simqit
 # ADJOINT
 from .objectives import compute_dJ_dsigma_cw
+from .gradient_validators import Validate_dj_dsigma
 '''
 not from rankine_panel.numba_kernels ... 
 (relative imports are more robust when people run scripts in different ways).
@@ -267,8 +268,12 @@ class RankineWaveResistanceSolver:
     # solve with NUMBA
     def solve(self, pf: PanelFile, geom: PanelGeometry, Fr: float) -> FlowResult:
         """
+        now solving both forward and adjoint problems
+        
         End-to-end: assemble, solve sigma, recompute vtotal, cp, zeta, force, cw.
         """
+        
+        print("\nSolving the Linear Wave Resistance Problem\n")
         npanels = pf.npanels
         nfspanels = pf.nfspanels
         N = pf.N #self.npanels + self.nfspanels
@@ -298,6 +303,7 @@ class RankineWaveResistanceSolver:
         # #sigma = dense_solve(A, b)  # dense solve for toy version  => scipy.linalg.solve
         
         # modification for reuse (slightly slower, but it will be worth it)
+        # # forward: A sigma = b
         lu, piv = lu_factor(A) # pre factor for use in adjoints and optimization
         
         # Forward (state): A sigma = b
@@ -372,22 +378,72 @@ class RankineWaveResistanceSolver:
             zeta[row] = (U / g) * (vtotal[row, 0] + U)
 
         # forces on hull (my fortran code uses rho=1025 for force)
-        rho = self.params.rho_water
+        rho_water = self.params.rho_water
         force = np.zeros(3, dtype=float)
         
         #Adjoint
         dJ_dsigma = compute_dJ_dsigma_cw(
-                    vel, vtotal, normals, area, center,
-                    npanels, vinf, rho_water=rho, rho_ref=rho)
+                    vel, vtotal, 
+                    normals, area, center,
+                    npanels, 
+                    vinf, 
+                    rho_water = rho_water, 
+                    rho_ref = self.params.rho_ref)
+        
+
+        #-------------------------------
+        # ADJOINT SOLVE        
+        #
+        lam = lu_solve((lu, piv), dJ_dsigma, trans=1)  # adjoint: A^T lam = dJ/dsigma
+        #
+        #-------------------------------
+        
 
         for i in range(npanels):
             if center[i, 2] < 0.0:
-                pressure_term = 0.5 * rho * U2 * cp[i] - rho * g * center[i, 2]
+                pressure_term = 0.5 * rho_water * U2 * cp[i] - rho_water * g * center[i, 2]
                 force += geom.area[i] * pressure_term * normals[i]
 
         # reference area S (wetted area) used in cw denom
         S = float(np.sum(geom.area[:npanels][center[:npanels, 2] < 0.0]))
         cw = -force[0] / (0.5 * self.params.rho_ref * (U**2) * S) #this will become our objective function!
+
+
+        #-------------------------------
+        # POSTPROCESSOR - CHECK dJ / dsigma
+        # assuming you already have sigma from the forward solve and vtotal for that sigma
+        # -------------------------------
+        # VALIDATE dJ/dsigma for J = -Fx
+        # -------------------------------
+        print("Calling validators")
+        postprocess_JnegFx = Validate_dj_dsigma.make_postprocess_JnegFx(
+            vel, vinf, coordsys, area, center, npanels, rho_water, g
+        )
+        
+        dJnegFx_dsigma = Validate_dj_dsigma.compute_dJ_dsigma_JnegFx(
+            vel=vel,
+            vtotal=vtotal,
+            normals=normals,
+            area=area,
+            center=center,
+            npanels=npanels,
+            rho_water=rho_water
+        )
+        
+        Validate_dj_dsigma.check_dJ_dsigma(
+            sigma=sigma,
+            dJ_dsigma=dJnegFx_dsigma,
+            postprocess=postprocess_JnegFx,
+            n_tests=5,
+            eps=1e-6,
+            seed=0
+        )
+        # -------------------------------
+        # END POST PROCESS VALIDATION
+        #-------------------------------
+
+
+
 
         return FlowResult(
             sigma=sigma, vtotal=vtotal, vn=vn, vt1=vt1, vt2=vt2,

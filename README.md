@@ -161,6 +161,20 @@ $$
 J = c_w = -\frac{F_x}{\tfrac{1}{2}\,\rho_{\mathrm{ref}}\,U^2\,S}.
 $$
 
+Oops, let's just make it the force
+
+
+$$
+J = c_w * \tfrac{1}{2}\,\rho_{\mathrm{ref}}\,U^2\,S = -F_x.
+$$
+
+in the x direction
+
+$$
+F_x = \sum_{i \in W} A_i\, p_i\, n_{i,x}
+$$
+
+
 
 That’s the discrete objective we differentiate.
 
@@ -178,7 +192,7 @@ $$
 \mathbf{g} \equiv \frac{\partial J}{\partial \boldsymbol{\sigma}} \in \mathbb{R}^N
 $$
 
-so we can solve the adjoint system
+* so we can solve the adjoint system
 
 $$
 A^T \boldsymbol{\lambda} = \mathbf{g}.
@@ -186,7 +200,7 @@ $$
 
 ### Key simplification (important)
 
-Look at the pressure term:
+* Look at the pressure term:
 
 $$
 p_i
@@ -194,15 +208,15 @@ p_i
 = \frac{1}{2}\rho U^2 - \frac{1}{2}\rho \lVert \mathbf{v}_i \rVert^2 - \rho g z_i.
 $$
 
-So we take the partial of pressure with respect to $\mathbf{v}_i$:
+* So we take the partial of pressure with respect to $\mathbf{v}_i$:
 
 $$
 \frac{\partial p_i}{\partial \mathbf{v}_i} = -\rho\,\mathbf{v}_i.
 $$
 
-Then get the partial with respect to $\mathbf{v}_i$ for the $x$-component of force:
+* Then get the partial with respect to $\mathbf{v}_i$ for the $x$-component of force:
 
-Substitue $p$ into to the force eqation, and differentiate as above:
+* Substitue $p$ into to the force eqation, and differentiate as above:
 
 $$
 F_x = \sum_{i \in W} A_i\, p_i\, n_{i,x}
@@ -212,7 +226,7 @@ F_x = \sum_{i \in W} A_i\, p_i\, n_{i,x}
 = -\rho\,A_i\,n_{i,x}\,\mathbf{v}_i.
 $$
 
-And remember $J$ is $c_w$ and we define shorthand $C$ here as:
+* And remember $J$ is $c_w$ and we define shorthand $C$ here as:
 
 $$
 J = -\frac{F_x}{C},
@@ -220,7 +234,7 @@ J = -\frac{F_x}{C},
 C = \frac{1}{2}\rho_{\mathrm{ref}} U^2 S,
 $$
 
-Upon differentiation with respec to $v_i$ we get
+* Upon differentiation with respec to $v_i$ we get
 
 $$
 \frac{\partial J}{\partial \mathbf{v}_i}
@@ -231,7 +245,7 @@ $$
 
 and zero otherwise.
 
-Finally, because
+* Finally, because
 
 $$
 \mathbf{v}_i
@@ -240,7 +254,7 @@ $$
 \frac{\partial \mathbf{v}_i}{\partial \sigma_j} = \mathbf{vel}_{ij},
 $$
 
-we have
+* we have
 
 $$
 \frac{\partial J}{\partial \sigma_j}
@@ -252,13 +266,13 @@ That’s the vector $\mathbf{g}$ we need.
 $$ \mathbf{g} = \frac{\partial J}{\partial \sigma_j}$$
 
 
-So its components are
+* So its components are
 
 $$
 g_j = \frac{\partial J}{\partial \sigma_j}, \qquad j = 1,\dots,N.
 $$
 
-And it’s exactly the right-hand side for the discrete adjoint solve that we used LU decomposition to setup:
+* And it’s exactly the right-hand side for the discrete adjoint solve that we used LU decomposition to setup:
 
 $$
 A^T \boldsymbol{\lambda} = \mathbf{g}.
@@ -266,7 +280,7 @@ $$
 
 
 
-## 3) Code: compute $\frac{\partial J}{\partial \sigma_j}$ ```python dJ_dsigma ``` from your existing arrays
+## 3) Code: compute $\frac{\partial J}{\partial \sigma_j}$ code: ``` dJ_dsigma ``` from your existing arrays
 
 Assuming:
 
@@ -281,18 +295,81 @@ Assuming:
 
 
 
+## 4) Then the adjoint solve (reuse LU)
+
+
+At this stage, you now have the adjoint variable $\boldsymbol{\lambda}$, ready to be used for shape derivatives:
+
+$$
+\frac{dJ}{dm}
+=
+\frac{\partial J}{\partial m}
++
+\boldsymbol{\lambda}^T
+\left(
+\frac{\partial b}{\partial m}
+-
+\frac{\partial A}{\partial m}\,\boldsymbol{\sigma}
+\right).
+$$
+
+
+## 5) A fast sanity check (before any shape derivatives)
+
+Do a finite-difference check w.r.t. $\boldsymbol{\sigma}$ (geometry fixed):
+
+Pick a random perturbation $d\boldsymbol{\sigma}$ and verify:
+
+$$
+J(\boldsymbol{\sigma} + \epsilon\, d\boldsymbol{\sigma}) - J(\boldsymbol{\sigma})
+\approx
+\epsilon \,\frac{dJ}{d\boldsymbol{\sigma}} \cdot d\boldsymbol{\sigma}.
+$$
 
 
 
 
+# Checking this Gradient
 
 
+## 1) `compute_dJ_dsigma_JnegFx` (for $J = -F_x$)
+
+From your force definition, only wetted hull panels contribute. With
+
+$$
+p_i
+= \frac{1}{2}\rho U^2 c_{p,i} - \rho g z_i
+= \frac{1}{2}\rho U^2 - \frac{1}{2}\rho \lVert \mathbf{v}_i \rVert^2 - \rho g z_i,
+$$
+
+we get
+
+$$
+\frac{\partial (-F_x)}{\partial \mathbf{v}_i}
+= -\rho\,A_i\,n_{i,x}\,\mathbf{v}_i,
+$$
+
+and therefore
+
+$$
+\frac{\partial J}{\partial \sigma_j}
+= \sum_i \left(\frac{\partial J}{\partial \mathbf{v}_i}\cdot \mathbf{vel}_{ij}\right).
+$$
 
 
+## 2) `check_dJ_dsigma()` — finite-difference check vs your `postprocess()`
 
+This checks the directional derivative along a random direction $d\boldsymbol{\sigma}$:
 
+$$
+\frac{J(\boldsymbol{\sigma} + \epsilon\, d\boldsymbol{\sigma}) - J(\boldsymbol{\sigma} - \epsilon\, d\boldsymbol{\sigma})}{2\epsilon}
+\approx
+\left(\frac{\partial J}{\partial \boldsymbol{\sigma}}\right)^T d\boldsymbol{\sigma}.
+$$
 
+### Requirements
 
+You provide a `postprocess(sigma)` callable that returns $J$ (and can compute from your cached `vel`, `coordsys`, etc.). It can return more too; we only use the objective scalar.
 
 
 

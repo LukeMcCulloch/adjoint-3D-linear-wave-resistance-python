@@ -2,7 +2,7 @@
 """
 Created on Wed Jan 14 22:30:07 2026
 
-@author: tluke
+@author: Luke McCulloch
 """
 
 from __future__ import annotations

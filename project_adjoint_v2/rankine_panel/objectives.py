@@ -31,5 +31,8 @@ def compute_dJ_dsigma_cw(
     dJ_dv[:npanels, :] = scale[:, None] * vtotal[:npanels, :]
 
     # dJ/dsigma_j = sum_i dJ_dv[i] · vel[i,j]
-    dJ_dsigma = np.einsum("ik,ijk->j", dJ_dv, vel)
+    dJ_dsigma = np.einsum("ik,ijk->j", dJ_dv, vel) # goes over all panels, including fs where the obj is 0
+    
+    # # hull-only version (equivalent)
+    # dJ_dsigma = np.einsum("ik,ijk->j", dJ_dv[:npanels], vel[:npanels])
     return dJ_dsigma
