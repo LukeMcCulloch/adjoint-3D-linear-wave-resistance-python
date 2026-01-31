@@ -421,12 +421,111 @@ $$
 
 So our scale needs to be **positive**, not negative.
 
-### Requirements
 
-You provide a `postprocess(sigma)` callable that returns $J$ (and can compute from the cached `vel`, `coordsys`, etc.). It can return more too; we only use the objective scalar.
+### code
+
+we provide a `postprocess(sigma)` callable that returns $J$ (and can compute from the cached `vel`, `coordsys`, etc.). It can return more too; we only use the objective scalar.
 
 
 
+## The Shape Derivatives
+
+shape derivative term:
+$$
+\lambda^T\left(-\frac{\partial A}{\partial m}\,\sigma + \frac{\partial b}{\partial m}\right)
+$$
+
+
+
+
+# Miscellaneous Dev Notes
+
+## Computing $\frac{\partial J }{\partial \sigma}$
+
+$$
+J = -F_x
+$$
+
+
+$$
+F_x = \sum_i A_i\,p_i\,n_{ix}
+$$
+
+
+$$
+p_i = \frac{1}{2}\rho U^2 \;-\; \frac{1}{2}\rho \lVert v_i\rVert^2 \;-\; \rho g z_i
+$$
+
+
+## The Shape Gradient (TLM TODO)
+
+
+
+## Right Hand Sides
+
+There are two different “RHS vectors” in play, and it’s easy to conflate them.
+
+### 1) “RHS” in the adjoint solve means $\partial J/\partial \sigma$
+
+The adjoint equation is:
+
+$$
+A^T \lambda = \frac{\partial J}{\partial \sigma}
+$$
+
+So the RHS is the vector
+
+$$
+g_\sigma := \frac{\partial J}{\partial \sigma}
+\quad\text{(length $N$).}
+$$
+
+If your objective is $J = c_w$, then the adjoint RHS is:
+
+$$
+g_\sigma(c_w) = \frac{\partial c_w}{\partial \sigma}
+$$
+
+That’s what your current `compute_dJ_dsigma_cw(...)` returns. That’s what I meant by the “cw RHS”.
+
+If your objective is $J = -F_x$, then the adjoint RHS is:
+
+$$
+g_\sigma(-F_x) = \frac{\partial(-F_x)}{\partial \sigma}
+$$
+
+That’s what `compute_dJ_dsigma_JnegFx(...)` returns.
+
+So yes: `compute_dJ_dsigma_JnegFx` is absolutely a “real adjoint RHS” — not “validation-only”.
+The validation simply checks that it’s correct.
+
+### 2) Relationship between the two RHS vectors
+
+In your code (with geometry fixed), you compute:
+
+$$
+c_w = \frac{-F_x}{C},
+\qquad
+C = \frac{1}{2}\rho_{\mathrm{ref}} U^2 S
+$$
+
+When differentiating w.r.t. $\sigma$, $C$ is constant (because $S$, $U$, $\rho_{\mathrm{ref}}$ don’t depend on $\sigma$). So:
+
+$$
+\frac{\partial c_w}{\partial \sigma}
+=
+\frac{1}{C}\,\frac{\partial(-F_x)}{\partial \sigma}
+$$
+
+So the $c_w$ RHS is just a scaled version of the $-F_x$ RHS.
+
+That means:
+
+- If you can compute $d(-F_x)/d\sigma$, you already have $dc_w/d\sigma$ for free by dividing by $C$.
+- Conversely, if you compute $dc_w/d\sigma$, it’s the same direction, just scaled.
+
+**Important:** This is only “free scaling” for derivatives w.r.t. $\sigma$.
+For shape derivatives $d/dm$, $S$ *does* depend on geometry, so $c_w$’s shape gradient has extra terms.
 
 
 ## python package requirements

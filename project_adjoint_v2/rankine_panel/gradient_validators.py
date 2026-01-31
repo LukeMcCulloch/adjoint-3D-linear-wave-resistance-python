@@ -7,6 +7,9 @@ Created on Fri Jan 30 14:08:17 2026
 
 import numpy as np
 
+from scipy.linalg import lu_factor, lu_solve
+
+
 class Validate_dj_dsigma(object):
     
     
@@ -112,5 +115,60 @@ class Validate_dj_dsigma(object):
             print(f"  test {t+1:02d}: fd={fd:+.6e}  an={an:+.6e}  abs={abs_err:.3e}  rel={rel_err:.3e}")
             
             
-            
-            
+
+class Validate_shape_gradient(object):
+    
+    
+    def check_shape_grad_beam_scale(pf, points0, Fr, params, numba_assemble,
+                                    eps_m=1e-5, m0=0.0):
+        """
+        Compares:
+          FD: (J(m+e)-J(m-e))/(2e)
+          Adjoint: lam^T (b_m - A_m sigma)
+    
+        Uses J = -Fx
+        """
+        hull_verts = hull_vertex_indices(pf.panels, pf.npanels)
+    
+        # --- baseline assemble/solve ---
+        A, b, vel, vinf, center, coordsys, area = assemble_from_points(points0, pf, Fr, params, numba_assemble)
+        lu, piv = lu_factor(A)
+        sigma = lu_solve((lu, piv), b)
+    
+        J0, vtotal0 = eval_JnegFx(vel, vinf, coordsys, area, center, pf.npanels, params.rho_water, params.gravity, sigma)
+    
+        dJ_dsigma = Validate_dj_dsigma.compute_dJ_dsigma_JnegFx(
+            vel=vel, vtotal=vtotal0, normals=coordsys[:, :, 2], area=area, center=center,
+            npanels=pf.npanels, rho_water=params.rho_water
+        )
+    
+        lam = lu_solve((lu, piv), dJ_dsigma, trans=1)
+        adj_relres = np.linalg.norm(A.T @ lam - dJ_dsigma) / (np.linalg.norm(dJ_dsigma) + 1e-30)
+        print("adjoint solve relres:", adj_relres)
+    
+        # --- assemble at m+eps and m-eps ---
+        pts_p = apply_beam_scale(points0, hull_verts, m0 + eps_m)
+        Ap, bp, velp, vinfp, centerp, coordsyp, areap = assemble_from_points(pts_p, pf, Fr, params, numba_assemble)
+        lup, pivp = lu_factor(Ap)
+        sigmap = lu_solve((lup, pivp), bp)
+        Jp, _ = eval_JnegFx(velp, vinfp, coordsyp, areap, centerp, pf.npanels, params.rho_water, params.gravity, sigmap)
+    
+        pts_m = apply_beam_scale(points0, hull_verts, m0 - eps_m)
+        Am, bm, velm, vinfm, centerm, coordsym, aream = assemble_from_points(pts_m, pf, Fr, params, numba_assemble)
+        lum, pivm = lu_factor(Am)
+        sigmam = lu_solve((lum, pivm), bm)
+        Jm, _ = eval_JnegFx(velm, vinfm, coordsym, aream, centerm, pf.npanels, params.rho_water, params.gravity, sigmam)
+    
+        # FD gradient of full objective
+        dJ_dm_fd = (Jp - Jm) / (2.0 * eps_m)
+    
+        # operator FD for adjoint gradient (using baseline sigma, lam)
+        dA_dm = (Ap - Am) / (2.0 * eps_m)
+        db_dm = (bp - bm) / (2.0 * eps_m)
+        dJ_dm_adj = float(lam @ (db_dm - dA_dm @ sigma))
+    
+        print("J0 =", J0)
+        print("dJ/dm FD     =", dJ_dm_fd)
+        print("dJ/dm adjoint=", dJ_dm_adj)
+        print("abs err      =", abs(dJ_dm_fd - dJ_dm_adj))
+        print("rel err      =", abs(dJ_dm_fd - dJ_dm_adj) / (abs(dJ_dm_fd) + 1e-30))

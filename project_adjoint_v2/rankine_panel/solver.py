@@ -18,7 +18,7 @@ from .numba_kernels import _require_numba, assemble_A_b_vel_nb
 #from .numba_kernels import assemble_A_b_vel_nb
 from .slae import solve_simqit
 # ADJOINT
-from .objectives import compute_dJ_dsigma_cw
+from .objectives import Objectives #compute_dJ_dsigma_cw, compute_dJ_dsigma_JnegFx
 from .gradient_validators import Validate_dj_dsigma
 '''
 not from rankine_panel.numba_kernels ... 
@@ -279,7 +279,7 @@ class RankineWaveResistanceSolver:
         N = pf.N #self.npanels + self.nfspanels
 
         vinf = self.vinf_from_Fr(Fr)
-        g = self.params.gravity
+        gravity = self.params.gravity
         
         # Prepare arrays in shapes Numba expects
         center = geom.center.T.astype(np.float64)                      # (N,3)
@@ -287,10 +287,14 @@ class RankineWaveResistanceSolver:
         cornerslocal = np.moveaxis(geom.cornerslocal, 2, 0).astype(np.float64)  # (N,2,4)
         area = geom.area.astype(np.float64)
         
+        
+        #-------------------------------
         # Assemble in Numba (this will compile on first run, then be fast)
         A, b, vel = assemble_A_b_vel_nb(center, coordsys, cornerslocal, area,
                                         npanels, nfspanels, pf.deltax,
-                                        vinf[0], g)
+                                        vinf[0], gravity)
+        # End Assembly
+        #-------------------------------
         
         # scipy.linalg.solve
         ##sigma = dense_solve(A, b)  # dense solve for toy version  => scipy.linalg.solve
@@ -316,14 +320,13 @@ class RankineWaveResistanceSolver:
         #
         # END FORWARD SOLVE
         #-------------------------------
-        N = pf.N
         
         
-        
-        amatmax = float(np.max(np.abs(A)))
-        sing = 1e-6 * amatmax
-        av = float(np.sqrt(1.0 / N))
-        dx = 1e-6
+        #N = pf.N
+        # amatmax = float(np.max(np.abs(A)))
+        # sing = 1e-6 * amatmax
+        # av = float(np.sqrt(1.0 / N))
+        # dx = 1e-6
         
         
         # sigma_smq, iters = solve_simqit(A, b, sing, av, dx)
@@ -375,33 +378,43 @@ class RankineWaveResistanceSolver:
         U = vinf[0]
         for i in range(nfspanels):
             row = npanels + i
-            zeta[row] = (U / g) * (vtotal[row, 0] + U)
+            zeta[row] = (U / gravity) * (vtotal[row, 0] + U)
 
         # forces on hull (my fortran code uses rho=1025 for force)
         rho_water = self.params.rho_water
         force = np.zeros(3, dtype=float)
         
+        #-------------------------------
         #Adjoint
-        dJ_dsigma = compute_dJ_dsigma_cw(
-                    vel, vtotal, 
-                    normals, area, center,
-                    npanels, 
-                    vinf, 
-                    rho_water = rho_water, 
-                    rho_ref = self.params.rho_ref)
         
-
+        # dJ_dsigma = Objectives.compute_dJ_dsigma_cw(
+        #             vel, vtotal, 
+        #             normals, area, center,
+        #             npanels, 
+        #             vinf, 
+        #             rho_water = rho_water, 
+        #             rho_ref = self.params.rho_ref)
+        
+        dJ_dsigma = Objectives.compute_dJ_dsigma_JnegFx(
+            vel=vel, vtotal=vtotal,
+            normals=normals,
+            area=area,
+            center=center,
+            npanels=npanels,
+            rho_water=rho_water
+        )
         #-------------------------------
         # ADJOINT SOLVE        
         #
         lam = lu_solve((lu, piv), dJ_dsigma, trans=1)  # adjoint: A^T lam = dJ/dsigma
         #
         #-------------------------------
+        # End of Adjoint computations
+        #-------------------------------
         
-
         for i in range(npanels):
             if center[i, 2] < 0.0:
-                pressure_term = 0.5 * rho_water * U2 * cp[i] - rho_water * g * center[i, 2]
+                pressure_term = 0.5 * rho_water * U2 * cp[i] - rho_water * gravity * center[i, 2]
                 force += geom.area[i] * pressure_term * normals[i]
 
         # reference area S (wetted area) used in cw denom
@@ -410,19 +423,18 @@ class RankineWaveResistanceSolver:
 
 
         #-------------------------------
-        # POSTPROCESSOR - CHECK dJ / dsigma
+        # POSTPROCESSOR - CHECK adjoint gradient, dJ / dsigma
         # assuming you already have sigma from the forward solve and vtotal for that sigma
         # -------------------------------
         # VALIDATE dJ/dsigma for J = -Fx
         # -------------------------------
         print("Calling validators")
         postprocess_JnegFx = Validate_dj_dsigma.make_postprocess_JnegFx(
-            vel, vinf, coordsys, area, center, npanels, rho_water, g
+            vel, vinf, coordsys, area, center, npanels, rho_water, gravity
         )
         
-        dJnegFx_dsigma = Validate_dj_dsigma.compute_dJ_dsigma_JnegFx(
-            vel=vel,
-            vtotal=vtotal,
+        dJnegFx_dsigma = Objectives.compute_dJ_dsigma_JnegFx(
+            vel=vel, vtotal=vtotal,
             normals=normals,
             area=area,
             center=center,
@@ -442,6 +454,10 @@ class RankineWaveResistanceSolver:
         # END POST PROCESS VALIDATION
         #-------------------------------
 
+
+        # sanity residual for adjoint solve
+        adj_relres = np.linalg.norm(A.T @ lam - dJnegFx_dsigma) / (np.linalg.norm(dJnegFx_dsigma) + 1e-30)
+        print("adjoint relres AT*lam=g:", adj_relres)
 
 
 

@@ -367,3 +367,26 @@ if njit is not None:
                 A[row, col] = U2*phi_xx + gravity*v2
 
         return A, b, vel
+
+
+
+    @njit(cache=True)
+    def assemble_from_points(points: np.ndarray, pf, Fr: float, params, numba_assemble):
+        """
+        Returns A,b,vel plus geometry cache needed for postprocess.
+        """
+        geom = panel_geometry_all(points, pf.panels)  # your function returns (3,N),(3,3,N),(2,4,N),(N,)
+    
+        vinf = np.array([Fr*np.sqrt(params.length*params.gravity), 0.0, 0.0], dtype=np.float64)
+        gravity = params.gravity
+    
+        center = geom.center.T.astype(np.float64)                      # (N,3)
+        coordsys = np.moveaxis(geom.coordsys, 2, 0).astype(np.float64) # (N,3,3)
+        cornerslocal = np.moveaxis(geom.cornerslocal, 2, 0).astype(np.float64)  # (N,2,4)
+        area = geom.area.astype(np.float64)
+    
+        A, b, vel = numba_assemble(center, coordsys, cornerslocal, area,
+                                   pf.npanels, pf.nfspanels, pf.deltax,
+                                   vinf[0], gravity)
+    
+        return A, b, vel, vinf, center, coordsys, area
