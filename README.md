@@ -597,7 +597,283 @@ For shape derivatives $d/dm$, $S$ *does* depend on geometry, so $c_w$’s shape 
 
 
 
+## coding notes
+* use of dependency injection allows for multiple objectives
+    * You’ll have multiple objectives.
+    * Today you have J=-Fx and J=cw. Tomorrow you might add:
+    * drag + regularization
+    * volume constraint penalty
+    * fairness penalties
+    * multi-speed objectives
+    * Injection lets you swap objectives without editing solver internals.
+* Testing becomes much easier.
+    * You can inject a toy objective with a known gradient and run checks without touching production code.
+* Avoid circular imports and module coupling.
+    * As soon as your solver imports “objectives” and objectives import solver types (or vice versa), Python packages can get annoying. Injection keeps modules cleaner.
 
+* CUDA/C++ transition.
+    *Later you may replace the objective gradient computation with a GPU version. With injection you can select the implementation at runtime (CPU vs GPU) without rewriting everything.
+* In summary, Injection is a scalability convenience, not a requirement.
+
+
+
+## Geometry Gradients in the Physics (Shape Gradients)
+
+
+
+the total derivative is:
+
+$$
+\frac{dJ}{dm}
+=
+\frac{\partial J}{\partial m}
++
+\lambda^T\left(
+\frac{\partial b}{\partial m}
+-
+\frac{\partial A}{\partial m}\,\sigma
+\right).
+$$
+
+The **total** derivative:
+
+$$
+\frac{dJ}{dm}
+=
+\underbrace{\left.\frac{\partial J}{\partial m}\right|_{\sigma}}_{\text{explicit geometry dependence}}
+\;+\;
+\underbrace{\left(\frac{\partial J}{\partial \sigma}\right)^T \frac{d\sigma}{dm}}_{\text{implicit through }\sigma}
+$$
+
+the **implicit** sensitivity through the state (physics) equation:
+
+$$
+\lambda^T\left(\frac{\partial b}{\partial m} - \frac{\partial A}{\partial m}\,\sigma\right)
+\quad\underbrace{\text{accounts for } d\sigma/dm}_{\text{implicit through }\sigma}
+$$
+
+
+For $J = -F_x$, the explicit term $\left.\partial J/\partial m\right|_{\sigma}$ is **not** small, because even with $\sigma$ held fixed, changing the hull geometry changes:
+
+- panel normals $n_i$
+- panel areas $A_i$
+- panel centers $z_i$ (hydrostatic term)
+- and (critically) the induced velocities `vel` used to form `vtotal` and $c_p$
+
+So your current adjoint term is expected to be smaller than the full FD derivative.
+The difference you see
+
+
+the total derivative (with respect to shape, m) is:
+
+$$
+\frac{dJ}{dm}
+=
+\frac{\partial J}{\partial m}
++
+\lambda^T\left(
+\frac{\partial b}{\partial m}
+-
+\frac{\partial A}{\partial m}\,\sigma
+\right).
+$$
+### What goes into ShapeGradients when you start doing it “for real” (no FD)
+
+For a given parameter $m$ (beam scale), “analytic shape gradients” means implementing:
+
+
+
+#### Implicit term without FD
+
+the implicit adjoint term is:
+
+$$
+\left.\frac{dJ}{dm}\right|_{\mathrm{implicit}}
+=
+\lambda^T\left(
+b_m - (A_m\,\sigma)
+\right)
+$$
+
+
+$$
+\left.\frac{dJ}{dm}\right|_{\mathrm{implicit}}
+=
+\lambda^T\left(b_m - w\right)
+$$
+
+- compute $b_m$ analytically  
+- $w = \frac{\partial A}{\partial m} \sigma$  and denote $A_m = \frac{\partial A}{\partial m}$
+- compute $A_m\,\sigma$ analytically (you don’t need the full $A_m$ matrix; you only need the product $A_m\,\sigma$)
+
+#### Explicit term without FD
+
+
+$$
+\frac{\partial J}{\partial m}
+$$
+
+$$
+\left.\frac{dJ}{dm}\right|_{\mathrm{\sigma}}
+=
+\lambda^T\left(b_m - w\right)
+$$
+
+- compute $\left.\frac{\partial J}{\partial m}\right|_{\sigma}$ analytically  
+
+This includes how the force integral changes due to:
+
+- normals, areas, centers  
+- and also due to $\mathbf{v}$ changing because influence kernels depend on geometry  
+
+You can add these incrementally.
+
+### The best “no-FD production” next step (and maps to CUDA)
+
+
+
+#### Implement the implicit term analytically as a matrix-free product
+
+
+$$
+\left.\frac{dJ}{dm}\right|_{\mathrm{implicit}}
+=
+\lambda^T\left(b_m - w\right)
+$$
+
+Instead of FD’ing $A_m$, compute the vector
+
+$$
+w = A_m\,\sigma
+$$
+
+directly by differentiating the row assembly formulas w.r.t. the design variable.
+
+That’s doable for beam scaling because each panel’s geometry changes in a structured way.
+
+Then you compute: 
+
+$$
+\left.\frac{dJ}{dm}\right|_{\mathrm{implicit}}
+=
+\lambda^T\left(b_m - w\right)
+$$
+
+This avoids:
+
+- assembling a full dense derivative matrix
+- FD cost scaling with $N^2$ per parameter
+
+and it’s exactly the form you’ll want on GPU.
+
+
+#### Implement the Explicit Term 
+
+
+$$
+\frac{\partial J}{\partial m}
+$$
+
+$$
+\left.\frac{dJ}{dm}\right|_{\mathrm{\sigma}}
+=
+\lambda^T\left(b_m - w\right)
+$$
+
+- compute $\left.\frac{\partial J}{\partial m}\right|_{\sigma}$ analytically  
+
+
+
+
+
+Right now your “adjoint dJ/dm” is computing only the **implicit** sensitivity through the state:
+
+$$
+\lambda^T\left(\frac{\partial b}{\partial m} - \frac{\partial A}{\partial m}\,\sigma\right)
+\quad\underbrace{\text{accounts for } d\sigma/dm}_{\text{implicit through }\sigma}
+$$
+
+But your FD “truth” is the **total** derivative:
+
+$$
+\frac{dJ}{dm}
+=
+\underbrace{\left.\frac{\partial J}{\partial m}\right|_{\sigma}}_{\text{explicit geometry dependence}}
+\;+\;
+\underbrace{\left(\frac{\partial J}{\partial \sigma}\right)^T \frac{d\sigma}{dm}}_{\text{implicit through }\sigma}
+$$
+
+For $J = -F_x$, the explicit term $\left.\partial J/\partial m\right|_{\sigma}$ is **not** small, because even with $\sigma$ held fixed, changing the hull geometry changes:
+
+- panel normals $n_i$
+- panel areas $A_i$
+- panel centers $z_i$ (hydrostatic term)
+- and (critically) the induced velocities `vel` used to form `vtotal` and $c_p$
+
+So your current adjoint term is expected to be smaller than the full FD derivative.
+The difference you see
+
+
+
+**Important:** You don’t have to do this for the entire operator on day 1. Start with a simplified path, validate against your FD harness (which you now trust), then expand.
+
+
+
+## Dev Notes: Automatic Differentiation and Adjoint derivatives
+
+## Gradients: where AD helps vs where adjoint helps
+
+You’ve already got AD for B-splines (great). The key is choosing where to apply it.
+
+## Best default in shape optimization
+
+If your solver can be written as
+
+$$
+A(m)\,x(m) = b(m),
+\qquad
+J = J(x,m),
+$$
+
+*Note: for our problem here, we have $x = \sigma$, computationally, this is our state in the physics solver*
+
+then the adjoint gives you gradients without ever forming $dx/dm$:
+
+- Solve state:  
+  $$
+  A x = b
+  $$
+
+- Solve adjoint:  
+  $$
+  A^T \lambda = \frac{\partial J}{\partial x}
+  $$
+
+- Gradient:  
+  $$
+  \frac{dJ}{dm}
+  =
+  \frac{\partial J}{\partial m}
+  +
+  \lambda^T\left(
+    \frac{\partial b}{\partial m}
+    -
+    \frac{\partial A}{\partial m}\,x
+  \right)
+  $$
+
+## Where AD is usually a win
+
+- Geometry parameterization: B-splines \(\rightarrow\) surface points, normals, Jacobians, constraints.
+- Derivatives of local geometric quantities (areas, normals, curvature proxies) if coded carefully.
+
+## Where adjoint is usually necessary
+
+- Anything that goes “through the PDE/linear system solve” (because naïve AD through a large linear solve is expensive unless you implement implicit differentiation anyway—which becomes the adjoint).
+
+So the common hybrid is:
+
+- Hand/implicit adjoint for the physics solve,
 
 ## python package requirements
 * numpy, scipy, matplotlib
