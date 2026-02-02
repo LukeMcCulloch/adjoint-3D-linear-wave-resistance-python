@@ -1,6 +1,109 @@
 # adjoint-3D-linear-wave-resistance-python
 a 3D BEM solver, optimization, and panel modification scheme for wave resistance using the generalized, linearized free surface conditions and Rankine sources
 
+## Forward Solver: the initial physics solver developmetn effort
+
+<!-- -------------------------------------------------------------- 
+-->
+
+# Steady Linear Wave-Resistance Panel Solver Notes (Rankine Sources + Discretized Free Surface)
+
+These notes document the **discrete** solver we are implementing (and matching to the original Fortran), including:
+- unknowns (source strengths)
+- influence kernels (panel-induced velocity and $\phi_{xx}$)
+- boundary conditions (hull no-penetration + generalized linear free-surface condition)
+- assembly of the linear system
+- postprocessing: velocities, pressure coefficient, wave elevation, forces, and $c_w$
+
+Everything is written in the same conventions used by our code.
+
+---
+
+## 0) Governing PDE and Decomposition
+
+We solve **Laplace's equation** for a velocity potential $\phi$ in an inviscid, incompressible flow:
+
+$$
+\nabla^2 \phi = 0
+$$
+
+We use a **source panel method**. The potential is represented as a superposition of constant-strength source distributions on:
+- the **hull** (wetted body surface)
+- a discretized patch of the **free surface** (planar patch, but sources placed above $z=0$ in our setup)
+
+A uniform free-stream velocity is
+$$
+\mathbf{v}_\infty = (U,0,0),\qquad U = Fr\,\sqrt{gL}
+$$
+with gravity $g$ and reference length $L$ (here $L=1$).
+
+The **total velocity** is
+$$
+\mathbf{v} = \nabla \phi \;-\; \mathbf{v}_\infty
+$$
+(our code uses the convention `vtotal = -vinf + induced`).
+
+---
+
+## 1) Geometry and Panels
+
+We have:
+- points: `points` of shape $(3,n_{\text{points}})$ with rows $(x,y,z)$
+- panels: `panels` of shape $(4,N)$, each panel is a quadrilateral given by 4 vertex indices
+- $N = N_h + N_{fs}$, where:
+  - $N_h$ = number of hull panels
+  - $N_{fs}$ = number of free-surface panels
+
+For each panel $j$ we compute:
+- `center[j]` : collocation point (panel centroid) in $\mathbb{R}^3$
+- `area[j]` : panel area $A_j$
+- `coordsys[j]` : a $(3\times 3)$ orthonormal basis whose columns are:
+  - $\mathbf{t}_{1,j}$ : tangent 1
+  - $\mathbf{t}_{2,j}$ : tangent 2
+  - $\mathbf{n}_j$ : panel normal
+- `cornerslocal[j]` : $(2\times 4)$ corner coordinates in the local $(\xi,\eta)$ plane
+
+> Normal convention (important): The corners are ordered so that the computed normal points **inside the hull** (as in the original Fortran).
+
+---
+
+## 2) Influence of a Source Panel
+
+Let panel $j$ have unit source strength. The induced **velocity** at a field point $\mathbf{p}$ is:
+
+$$
+\mathbf{v}_{j}(\mathbf{p}) = \nabla \phi_j(\mathbf{p})
+$$
+
+In code we compute this via `hs_influence(fieldpoint, center_j, coordsys_j, cornerslocal_j)`.
+
+We also compute the global Hessian (second derivatives) at $\mathbf{p}$:
+$$
+H_j(\mathbf{p}) = \nabla\nabla \phi_j(\mathbf{p})
+$$
+and in particular we need $\phi_{xx}$ for the free-surface condition.
+
+In code this is `phixx_influence(...)`, and we extract `H[0,0]`.
+
+### Stored influence tensor
+
+We store:
+- `vel[i,j,:]` = induced velocity at collocation/field index $i$ due to unit source on panel $j$
+- shape: `vel` is $(N,N,3)$
+
+So once $\sigma$ is known:
+$$
+\mathbf{v}_i = -\mathbf{v}_\infty + \sum_{j=1}^{N}\sigma_j\,\mathbf{vel}_{ij}
+$$
+
+In NumPy:
+```python
+vtotal = -vinf[None,:] + np.einsum("ijm,j->im", vel, sigma)
+```
+
+<!--  ----------------------------------------------------------------
+-->
+
 
 * starting from a python version of my old 3d linear wave resistance code
 
@@ -8,52 +111,393 @@ a 3D BEM solver, optimization, and panel modification scheme for wave resistance
 <!-- -----------------------------------------------------------------
  -->
 
+## 3) Symmetry About the Centerplane (Half-Ship)
+
+We enforce symmetry about the $x$-$z$ plane (centerplane) by using an image point:
+
+$$
+p' = (x,\,-y,\,z)
+$$
+
+For a velocity vector $\mathbf{v}=(v_x,v_y,v_z)$ at the mirrored point, the symmetric half-ship combination is:
+
+- $v_x$ is even in $y$
+- $v_y$ is odd in $y$
+- $v_z$ is even in $y$
+
+So the combined induced velocity used in the system is:
+
+$$
+v_x \leftarrow v_x + v_x',\qquad
+v_y \leftarrow v_y - v_y',\qquad
+v_z \leftarrow v_z + v_z'
+$$
+
+For the Hessian, we only use $\phi_{xx}$; it is even in $y$, so:
+
+$$
+\phi_{xx} \leftarrow \phi_{xx} + \phi_{xx}'.
+$$
+
+## 4) Boundary Conditions (Discrete Residual)
+
+We assemble a linear system:
+
+$$
+A\,\sigma = b
+$$
+
+### 4.1 Hull no-penetration (Body BC)
+
+At each hull collocation point $i\in\{1,\dots,N_h\}$:
+
+$$
+\mathbf{n}_i \cdot \mathbf{v}_i = 0
+$$
+
+Using $\mathbf{v}_i = -\mathbf{v}_\infty + \sum_j \sigma_j\,\mathbf{vel}_{ij}$:
+
+$$
+\mathbf{n}_i \cdot \left(\sum_{j=1}^{N}\sigma_j\,\mathbf{vel}_{ij}\right)
+=
+\mathbf{n}_i \cdot \mathbf{v}_\infty
+$$
+
+So:
+
+- matrix row entries:
+  $$
+  A_{ij} = \mathbf{n}_i \cdot \mathbf{vel}_{ij}
+  $$
+- RHS:
+  $$
+  b_i = \mathbf{n}_i \cdot \mathbf{v}_\infty
+  $$
+
+#### Self-term (singular diagonal on the hull)
+
+For $i=j$ on the hull, we use the known limiting value for a constant source panel:
+
+$$
+\mathbf{vel}_{ii} \approx -\frac{1}{2}\mathbf{n}_i
+$$
+
+so
+
+$$
+A_{ii} \approx \mathbf{n}_i \cdot \left(-\frac{1}{2}\mathbf{n}_i\right) = -\frac{1}{2}.
+$$
+
+(In practice we set `vel[:, i, i] = -0.5*n_i` before dotting.)
+
+### 4.2 Free-surface condition (Generalized linearized FS BC)
+
+We enforce the combined (generalized) linear free-surface boundary condition in steady forward motion:
+
+$$
+U^2\,\phi_{xx} + g\,\phi_{z} = 0
+\quad\text{at}\quad z=0.
+$$
+
+We discretize this at each free-surface collocation point $i\in\{N_h+1,\dots,N\}$.
+
+In our code:
+
+- the free-surface collocation point is adjusted by a small $x$ offset $\Delta x$:
+  $$
+  x \leftarrow x + \Delta x
+  $$
+- and set to $z=0$:
+  $$
+  z \leftarrow 0
+  $$
+
+This acts like a stabilizing / radiation bias (Sommerfeld-style behavior).
+
+For each $j$:
+
+- we compute $\phi_{xx}^{(j)}(p_i)$ from the Hessian $H_j(p_i)$:
+  $$
+  \phi_{xx}^{(j)}(p_i) = [H_j(p_i)]_{xx}
+  $$
+- we compute $\phi_{z}^{(j)}(p_i)$ from the induced velocity:
+  $$
+  \phi_{z}^{(j)}(p_i) = [\mathbf{vel}_{ij}]_{z}
+  $$
+
+Therefore the free-surface row is:
+
+$$
+A_{ij}
+=
+U^2\,\phi_{xx}^{(j)}(p_i) + g\,\phi_{z}^{(j)}(p_i)
+$$
+
+and we use:
+
+$$
+b_i = 0.
+$$
+
+Free-surface sources are placed above $z=0$ in our geometry setup, so the evaluation at $z=0$ is nonsingular.
+
+## 5) Solving for Source Strengths
+
+Once assembled:
+
+$$
+A\,\sigma = b
+$$
+
+We solve using a dense linear solve (LU factorization reused for adjoints):
+
+```python
+lu, piv = lu_factor(A)
+sigma = lu_solve((lu, piv), b)          # solves A*sigma=b
+```
+
+
+## 6) Postprocessing: Velocity Components on Each Panel
+
+### Total velocity at each panel collocation
+
+$$
+\mathbf{v}_i
+=
+-\mathbf{v}_\infty
++
+\sum_{j=1}^{N}\sigma_j\,\mathbf{vel}_{ij}
+$$
+
+### Normal and tangential components
+
+$$
+v_{n,i} = \mathbf{n}_i\cdot \mathbf{v}_i,\qquad
+v_{t1,i} = \mathbf{t}_{1,i}\cdot \mathbf{v}_i,\qquad
+v_{t2,i} = \mathbf{t}_{2,i}\cdot \mathbf{v}_i.
+$$
+
+In code (vectorized):
+
+```python
+vn  = np.einsum("ij,ij->i", normals, vtotal)
+vt1 = np.einsum("ij,ij->i", t1, vtotal)
+vt2 = np.einsum("ij,ij->i", t2, vtotal)
+```
+
+
+For a correct solution: on the hull, $v_{n,i}$ should be near zero (no penetration).
+
+## 7) Pressure Coefficient on the Hull
+
+On hull panels only ($i\le N_h$), we compute a steady Bernoulli pressure coefficient:
+
+$$
+c_{p,i}
+=
+1 - \frac{\lVert \mathbf{v}_i\rVert^2}{\lVert \mathbf{v}_\infty\rVert^2}
+=
+1 - \frac{\lVert \mathbf{v}_i\rVert^2}{U^2}.
+$$
+
+In code:
+
+```python
+cp[:npanels] = 1.0 - (np.sum(vtotal[:npanels]**2, axis=1) / U2)
+```
+
+## 8) Source-Sink Check (Conservation Diagnostic)
+
+For a closed body in source methods, the total source strength integrated over the body should be near zero. We monitor:
+
+$$
+\mathrm{sourcesink} = \sum_{j=1}^{N}\sigma_j\,A_j
+$$
+
+In code:
+
+```python
+sourcesink = float(np.sum(sigma * area))
+```
+This is a useful diagnostic (it should be small).
+
+## 9) Wave Elevation on the Free Surface
+
+From linearized theory in steady forward motion, our code uses:
+
+$$
+\zeta_i = \frac{U}{g}\left(v_{x,i} + U\right)
+\quad\text{for}\quad i\in\{N_h+1,\dots,N\}.
+$$
+
+In code:
+
+```python
+zeta[row] = (U / gravity) * (vtotal[row, 0] + U)
+```
+(Here vtotal[row,0] is $v_x$ at the free-surface collocation.)
+
+
+
+## 10) Force on the Hull
+
+We compute a pressure-like term:
+
+$$
+p_i = \frac{1}{2}\rho U^2\,c_{p,i} - \rho g z_i
+$$
+
+and integrate over wetted hull panels.
+
+Wetted set:
+
+$$
+W = \{\, i \le N_h \mid z_i < 0 \,\}
+$$
+
+Force vector:
+
+$$
+\mathbf{F} = \sum_{i\in W} A_i\,p_i\,\mathbf{n}_i.
+$$
+
+In code:
+
+```python
+for i in range(npanels):
+    if center[i,2] < 0.0:
+        pressure_term = 0.5*rho*U2*cp[i] - rho*gravity*center[i,2]
+        force += area[i] * pressure_term * normals[i]
+```
+The $x$-component $F_x$ is the wave-resistance force component in our sign convention.
+
+
+## 11) Wave Resistance Coefficient
+
+We form the wetted reference area:
+
+$$
+S = \sum_{i\in W} A_i
+$$
+
+Then:
+
+$$
+c_w = \frac{-F_x}{\tfrac{1}{2}\rho_{\mathrm{ref}} U^2 S}.
+$$
+
+In code:
+
+```python
+S = sum(area[:npanels][center[:npanels,2] < 0.0])
+cw = -force[0] / (0.5 * rho_ref * U**2 * S)
+```
+
+## 12) Summary of Core Computations (Discrete Pipeline)
+
+Given geometry (points + quads):
+
+- Compute per-panel geometry: `center`, `coordsys`, `cornerslocal`, `area`.
+
+- Assemble $A$ and $b$ using:
+  - hull BC: $A_{ij} = \mathbf{n}_i\cdot \mathbf{vel}_{ij}$, $b_i=\mathbf{n}_i\cdot \mathbf{v}_\infty$
+  - free surface BC: $A_{ij}=U^2\phi_{xx}+g\phi_z$, $b_i=0$
+  - symmetry by mirrored fieldpoint contribution
+  - special hull diagonal: $\mathbf{vel}_{ii}=-\tfrac12 \mathbf{n}_i$
+
+- Solve $A\,\sigma=b$.
+
+- Compute velocities:
+  $$
+  \mathbf{v}_i
+  =
+  -\mathbf{v}_\infty
+  +
+  \sum_{j=1}^{N}\sigma_j\,\mathbf{vel}_{ij}.
+  $$
+
+- Compute:
+  - $c_p$ on hull
+  - $\zeta$ on free surface
+  - force $\mathbf{F}$ on wetted hull
+  - $c_w$
+
+
+## 13) Notes on "Deriving the Entire Solver"
+
+A full continuous derivation of the Rankine-source method typically proceeds by:
+
+- representing $\phi$ via Green's identities (boundary integrals)
+- choosing a Rankine (free-space) source kernel for Laplace’s equation
+- discretizing the boundary into panels with constant source strength
+- collocating boundary conditions to produce a linear system
+
+In our implementation we treat the influence formulas (`hs_influence`, `phixx_influence`) as the analytic evaluation of:
+
+- panel-induced $\nabla\phi$ (velocity)
+- panel-induced $\phi_{xx}$
+
+Thus, our “derivation” at the code level is essentially:
+
+- define residual rows from boundary conditions
+- evaluate analytic influence coefficients
+- assemble and solve
+
+If we later want a continuous derivation section, we can add it, but the above captures the solver as actually implemented.
+
+
+<!-- -----------------------------------------------------------------
+ -->
+ 
+ 
+<!-- -----------------------------------------------------------------
+ -->
 # Discrete Adjoint for Shape Optimization (Full Derivation)
 
 This note re-connects the math to the code. We start from the **discrete** physics
-\[
+$$
 R(m,\sigma)=0
-\]
+$$
 and a scalar objective
-\[
+$$
 J(m,\sigma)
-\]
+$$
 and derive the adjoint equation and the final shape gradient.
 
 Throughout:
-- \(m\in\mathbb{R}^k\) are design variables (shape parameters)
-- \(\sigma\in\mathbb{R}^N\) are the state unknowns (source strengths)
-- \(R(m,\sigma)\in\mathbb{R}^N\) is the discrete residual (the assembled boundary conditions)
-- \(J(m,\sigma)\in\mathbb{R}\) is the objective (e.g. \(J=-F_x\) or \(J=c_w\))
 
-> **Important sign/notation point:** There are two common conventions for the Lagrangian.
-> They lead to the same final gradient if used consistently, but they differ by a sign
-> in the adjoint equation.
+- $m\in\mathbb{R}^k$ are design variables (shape parameters)
+- $\sigma\in\mathbb{R}^N$ are the state unknowns (source strengths)
+- $R(m,\sigma)\in\mathbb{R}^N$ is the discrete residual (the assembled boundary conditions)
+- $J(m,\sigma)\in\mathbb{R}$ is the objective (e.g. $J=-F_x$ or $J=c_w$)
+
+> **Important sign/notation point:** There are two common conventions for the Lagrangian.  
+> They lead to the same final gradient if used consistently, but they differ by a sign in the adjoint equation.
 
 ---
 
 ## 1. Discrete Physics as a Residual
 
 Our forward solver is a residual equation
-\[
+$$
 R(m,\sigma)=0.
-\]
+$$
 
-For the Rankine-source panel method, the residual is typically linear in \(\sigma\):
-\[
+For the Rankine-source panel method, the residual is typically linear in $\sigma$:
+$$
 R(m,\sigma) = A(m)\,\sigma - b(m) = 0.
-\]
+$$
 
-- \(A(m)\in\mathbb{R}^{N\times N}\) is the influence matrix (depends on geometry \(m\))
-- \(b(m)\in\mathbb{R}^N\) is the RHS (also depends on geometry \(m\))
-- \(\sigma\in\mathbb{R}^N\) is the state
+- $A(m)\in\mathbb{R}^{N\times N}$ is the influence matrix (depends on geometry $m$)
+- $b(m)\in\mathbb{R}^N$ is the RHS (also depends on geometry $m$)
+- $\sigma\in\mathbb{R}^N$ is the state
 
 So:
-\[
-R_\sigma \equiv \frac{\partial R}{\partial \sigma} = A(m),\quad
+$$
+R_\sigma \equiv \frac{\partial R}{\partial \sigma} = A(m),\qquad
 R_m \equiv \frac{\partial R}{\partial m} = A_m(m)\,\sigma - b_m(m),
-\]
-where \(A_m\) is a third-order tensor; in practice we apply it as a product \(A_m\,\sigma\).
+$$
+where $A_m$ is a third-order tensor; in practice we apply it as a product $A_m\,\sigma$.
 
 ---
 
@@ -61,186 +505,189 @@ where \(A_m\) is a third-order tensor; in practice we apply it as a product \(A_
 
 We choose an objective such as:
 
-### 2.1 Start objective (recommended first): \(J=-F_x\)
-\[
+### 2.1 Start objective (recommended first): $J=-F_x$
+$$
 J(m,\sigma) = -F_x(m,\sigma).
-\]
+$$
 
-### 2.2 Normalized wave resistance coefficient: \(J=c_w\)
-\[
-c_w = -\frac{F_x}{\tfrac12\rho_{\text{ref}}U^2 S(m)}.
-\]
+### 2.2 Normalized wave resistance coefficient: $J=c_w$
+$$
+c_w = -\frac{F_x}{\tfrac12\rho_{\text{ref}}U^2\, S(m)}.
+$$
 
-When differentiating w.r.t. \(\sigma\), the denominator is constant (it depends on geometry and flow parameters, not \(\sigma\)).
-When differentiating w.r.t. \(m\), the denominator contributes extra terms via \(S(m)\).
+When differentiating w.r.t. $\sigma$, the denominator is constant (it depends on geometry and flow parameters, not $\sigma$).  
+When differentiating w.r.t. $m$, the denominator contributes extra terms via $S(m)$.
 
 ---
 
 ## 3. Total Derivative We Want
 
 We want the gradient
-\[
+$$
 \frac{dJ}{dm}
-\]
-accounting for the fact that \(\sigma=\sigma(m)\) is implicitly defined by \(R(m,\sigma(m))=0\).
+$$
+accounting for the fact that $\sigma=\sigma(m)$ is implicitly defined by $R(m,\sigma(m))=0$.
 
 By the chain rule:
-\[
+$$
 \frac{dJ}{dm} = J_m + J_\sigma \,\sigma_m,
-\]
+$$
 where:
-- \(J_m = \frac{\partial J}{\partial m}\) (explicit dependence on geometry)
-- \(J_\sigma = \frac{\partial J}{\partial \sigma}\) (sensitivity to the state)
-- \(\sigma_m = \frac{d\sigma}{dm}\) (implicit response of the state to geometry)
+
+- $J_m = \frac{\partial J}{\partial m}$ (explicit dependence on geometry)
+- $J_\sigma = \frac{\partial J}{\partial \sigma}$ (sensitivity to the state)
+- $\sigma_m = \frac{d\sigma}{dm}$ (implicit response of the state to geometry)
 
 ---
 
-## 4. Differentiate the Constraint to Get \(\sigma_m\)
+## 4. Differentiate the Constraint to Get $\sigma_m$
 
-Differentiate \(R(m,\sigma(m))=0\) w.r.t. \(m\):
-
-\[
-R_m + R_\sigma \,\sigma_m = 0
-\]
+Differentiate $R(m,\sigma(m))=0$ w.r.t. $m$:
+$$
+R_m + R_\sigma \,\sigma_m = 0.
+$$
 
 So:
-\[
+$$
 \sigma_m = - R_\sigma^{-1} R_m.
-\]
+$$
 
 Plug into the total derivative:
-\[
+$$
 \frac{dJ}{dm} = J_m - J_\sigma \,R_\sigma^{-1} R_m.
-\]
+$$
 
-This is correct but expensive because it involves \(R_\sigma^{-1}\) applied to something **for every design variable**.
+This is correct but expensive because it involves $R_\sigma^{-1}$ applied to something **for every design variable**.
 
 ---
 
 ## 5. Adjoint Trick
 
-We introduce an adjoint vector \(\lambda\in\mathbb{R}^N\) to avoid computing \(\sigma_m\).
+We introduce an adjoint vector $\lambda\in\mathbb{R}^N$ to avoid computing $\sigma_m$.
 
-Define \(\lambda\) by:
-\[
+Define $\lambda$ by:
+$$
 R_\sigma^T \lambda = J_\sigma^T.
-\]
+$$
 
 Then
-\[
+$$
+\begin{aligned}
 J_\sigma \,R_\sigma^{-1} R_m
-= (J_\sigma^T)^T R_\sigma^{-1} R_m
-= (R_\sigma^T\lambda)^T R_\sigma^{-1} R_m
-= \lambda^T R_\sigma R_\sigma^{-1} R_m
-= \lambda^T R_m.
-\]
+&= (J_\sigma^T)^T R_\sigma^{-1} R_m \\
+&= (R_\sigma^T\lambda)^T R_\sigma^{-1} R_m \\
+&= \lambda^T R_\sigma R_\sigma^{-1} R_m \\
+&= \lambda^T R_m.
+\end{aligned}
+$$
 
 Therefore the full shape gradient becomes:
-\[
+$$
 \boxed{
 \frac{dJ}{dm} = J_m - \lambda^T R_m
 }
-\]
+$$
 
 This is the key result.
 
-### For linear residual \(R=A\sigma-b\)
-\[
-R_\sigma = A,\quad R_m = A_m\sigma - b_m
-\]
+### For linear residual $R=A\sigma-b$
+$$
+R_\sigma = A,\qquad R_m = A_m\sigma - b_m
+$$
 so:
-\[
+$$
 \boxed{
 \frac{dJ}{dm} = J_m - \lambda^T (A_m\sigma - b_m)
 = J_m + \lambda^T (b_m - A_m\sigma)
 }
-\]
+$$
 
 ---
 
 ## 6. Two Common Lagrangian Conventions (Sign Confusion Resolved)
 
 ### Convention A (most common in PDE-constrained optimization)
-\[
+$$
 \mathcal{L}(m,\sigma,\lambda) = J(m,\sigma) + \lambda^T R(m,\sigma).
-\]
+$$
 
-Stationarity w.r.t. \(\sigma\):
-\[
+Stationarity w.r.t. $\sigma$:
+$$
 \frac{\partial \mathcal{L}}{\partial \sigma}
 = J_\sigma + R_\sigma^T \lambda = 0
 \quad\Rightarrow\quad
 \boxed{
 R_\sigma^T \lambda = -J_\sigma^T
 }
-\]
+$$
 
 Then the gradient becomes:
-\[
+$$
 \boxed{
 \frac{dJ}{dm} = J_m + \lambda^T R_m
 }
-\]
-(because this \(\lambda\) has the opposite sign relative to the earlier definition).
+$$
+(because this $\lambda$ has the opposite sign relative to the earlier definition).
 
 ### Convention B (matches the "adjoint trick" definition used above)
-\[
+$$
 \mathcal{L}(m,\sigma,\lambda) = J(m,\sigma) - \lambda^T R(m,\sigma).
-\]
+$$
 
-Stationarity w.r.t. \(\sigma\):
-\[
+Stationarity w.r.t. $\sigma$:
+$$
 \frac{\partial \mathcal{L}}{\partial \sigma}
 = J_\sigma - R_\sigma^T \lambda = 0
 \quad\Rightarrow\quad
 \boxed{
 R_\sigma^T \lambda = J_\sigma^T
 }
-\]
+$$
 
 Then the gradient becomes:
-\[
+$$
 \boxed{
 \frac{dJ}{dm} = J_m - \lambda^T R_m
 }
-\]
+$$
 
-> **Bottom line:** both are correct. They differ only by the sign convention for \(\lambda\).
+> **Bottom line:** both are correct. They differ only by the sign convention for $\lambda$.  
 > Pick one convention and stick to it.
 
 ---
 
-## 7. Why You Sometimes See \(A^T\lambda = -R_m\)
+## 7. Why You Sometimes See $A^T\lambda = -R_m$
 
-If you are deriving the adjoint from the physics **to get \(\sigma_m\)** (i.e., the tangent/forward sensitivity),
+If you are deriving sensitivities from the physics **to get $\sigma_m$** (i.e., tangent/forward sensitivity),
 you may write:
 
 From:
-\[
+$$
 R_\sigma \sigma_m = -R_m
-\]
-you can solve for \(\sigma_m\) directly:
-\[
+$$
+you can solve for $\sigma_m$ directly:
+$$
 A\,\sigma_m = -(A_m\sigma - b_m).
-\]
+$$
 
-If you introduce an adjoint-like variable to avoid forming \(\sigma_m\), you *might* write a system like
-\[
+If you introduce an adjoint-like variable to avoid forming $\sigma_m$, you *might* write a system like
+$$
 A^T \lambda = -R_m
-\]
+$$
 but note:
 
-- This \(\lambda\) is **not** the objective adjoint. It is an auxiliary variable related to the constraint derivative.
-- The standard discrete adjoint for optimizing \(J\) is:
-  \[
+- This $\lambda$ is **not** the objective adjoint. It is an auxiliary variable related to the constraint derivative.
+- The standard discrete adjoint for optimizing $J$ is:
+  $$
   A^T \lambda = J_\sigma^T
-  \]
+  $$
   (or with a minus depending on Lagrangian sign).
 
 So:
-- \(A^T\lambda = J_\sigma^T\) is the **adjoint equation for optimizing**.
-- \(A\,\sigma_m = -R_m\) is the **tangent equation** for state sensitivity.
-- Writing \(A^T\lambda = -R_m\) is mixing roles unless you are defining a different multiplier.
+
+- $A^T\lambda = J_\sigma^T$ is the **adjoint equation for optimizing**.
+- $A\,\sigma_m = -R_m$ is the **tangent equation** for state sensitivity.
+- Writing $A^T\lambda = -R_m$ is mixing roles unless you are defining a different multiplier.
 
 ---
 
@@ -250,68 +697,70 @@ For a gradient-based shape update, at each iteration:
 
 ### Step 1: Forward solve (state)
 Solve the residual:
-\[
+$$
 R(m,\sigma)=0 \quad\Rightarrow\quad A(m)\sigma=b(m).
-\]
+$$
 
 ### Step 2: Evaluate objective
 Compute:
-\[
+$$
 J(m,\sigma).
-\]
+$$
 
 ### Step 3: Compute state sensitivity of objective
 Compute:
-\[
+$$
 g_\sigma = J_\sigma \in\mathbb{R}^N.
-\]
+$$
 
-Example (for \(J=-F_x\)), this is what we validated numerically:
-\[
-g_{\sigma,j} = \sum_i \left(\frac{\partial J}{\partial v_i}\cdot vel_{ij}\right).
-\]
+Example (for $J=-F_x$), this is what we validated numerically:
+$$
+g_{\sigma,j} = \sum_i \left(\frac{\partial J}{\partial v_i}\cdot \mathrm{vel}_{ij}\right).
+$$
 
 ### Step 4: Adjoint solve
 Solve:
-\[
+$$
 A(m)^T \lambda = g_\sigma^T
-\]
-(or \(= -g_\sigma^T\) depending on your Lagrangian convention).
+$$
+(or $= -g_\sigma^T$ depending on your Lagrangian convention).
 
 ### Step 5: Compute shape gradient
 Compute:
-\[
+$$
 \frac{dJ}{dm} = J_m + \lambda^T (b_m - A_m\sigma)
-\]
+$$
 (or the sign-flipped equivalent).
 
 In practice:
-- Compute \(b_m\) (vector)
-- Compute \(w = A_m\sigma\) (vector), without forming \(A_m\)
+
+- Compute $b_m$ (vector)
+- Compute $w = A_m\sigma$ (vector), without forming $A_m$
 - Combine:
-  \[
+  $$
   \lambda^T (b_m - w)
-  \]
+  $$
 
 ### Step 6: Apply update
 Update design variables:
-\[
+$$
 m \leftarrow m - \alpha \, \nabla_m J
-\]
+$$
 (with line search / trust region / constraints).
 
 ---
 
 ## 9. Boundary Conditions for the Adjoint
 
-In the **discrete adjoint**, the “boundary conditions” are automatically encoded by the discrete operator \(A(m)\):
+In the **discrete adjoint**, the “boundary conditions” are automatically encoded by the discrete operator $A(m)$:
 
-- The forward BCs are enforced by assembling \(A\) and \(b\) from:
+- The forward BCs are enforced by assembling $A$ and $b$ from:
   - hull no-penetration
   - free-surface linearized BC (generalized kinematic+dynamic)
-- The adjoint system uses \(A^T\), meaning the coupling of equations is transposed, but **no new continuous BC derivation is required**.
+- The adjoint system uses $A^T$, meaning the coupling of equations is transposed, but **no new continuous BC derivation is required**.
 
 So in code:
+
 - forward: solve `A sigma = b`
 - adjoint: solve `A.T lam = dJ_dsigma`
 
@@ -321,31 +770,34 @@ So in code:
 
 At each shape iteration:
 
-1. **Assemble** \(A(m), b(m)\)
-2. **Solve forward** \(A\sigma=b\)
-3. **Compute objective** \(J(m,\sigma)\)
-4. **Compute RHS** \(g_\sigma = \partial J/\partial \sigma\)
-5. **Solve adjoint** \(A^T\lambda=g_\sigma^T\)
+1. **Assemble** $A(m), b(m)$
+2. **Solve forward** $A\sigma=b$
+3. **Compute objective** $J(m,\sigma)$
+4. **Compute RHS** $g_\sigma = \partial J/\partial \sigma$
+5. **Solve adjoint** $A^T\lambda=g_\sigma^T$
 6. **Compute shape gradient**
-   \[
+   $$
    \frac{dJ}{dm} = J_m + \lambda^T(b_m - A_m\sigma)
-   \]
-7. **Update shape** \(m \leftarrow m - \alpha \nabla_m J\)
+   $$
+7. **Update shape** $m \leftarrow m - \alpha \nabla_m J$
 
 ---
 
 ## 11. Practical Notes for Our Current Code
 
-- We validated \(g_\sigma=\partial(-F_x)/\partial\sigma\) using FD directional checks.
-- We validated the adjoint solve residual \(\|A^T\lambda-g_\sigma\|/\|g_\sigma\|\) is near machine precision.
+- We validated $g_\sigma=\partial(-F_x)/\partial\sigma$ using FD directional checks.
+- We validated the adjoint solve residual $\|A^T\lambda-g_\sigma\|/\|g_\sigma\|$ is near machine precision.
 - For the beam-scaling test, we validated:
-  \[
-  \frac{dJ}{dm} \approx \underbrace{\frac{\partial J}{\partial m}\Big|_{\sigma}}_{\text{explicit}} + \underbrace{\lambda^T(b_m - A_m\sigma)}_{\text{implicit}}
-  \]
+  $$
+  \frac{dJ}{dm} \approx 
+  \underbrace{\frac{\partial J}{\partial m}\Big|_{\sigma}}_{\text{explicit}} +
+  \underbrace{\lambda^T(b_m - A_m\sigma)}_{\text{implicit}}
+  $$
   and matched full FD to high accuracy.
 
 Next development step:
-- Implement the implicit term \(b_m - A_m\sigma\) without finite differences, e.g. via complex-step or analytic/AD inside the residual evaluation.
+
+- Implement the implicit term $b_m - A_m\sigma$ without finite differences, e.g. via complex-step or analytic/AD inside the residual evaluation.
 
 <!--  ----------------------------------------------------------------
 -->
