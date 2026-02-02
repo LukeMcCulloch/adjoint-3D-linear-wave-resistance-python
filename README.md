@@ -150,7 +150,7 @@ $$
 \mathbf{n}_i \cdot \mathbf{v}_i = 0
 $$
 
-Using $\mathbf{v}_i = -\mathbf{v}_\infty + \sum_j \sigma_j\,\mathbf{vel}_{ij}$:
+Using $ \mathbf{v}_i = -\mathbf{v}_\infty + \sum_j \sigma_j\,\mathbf{vel}_{ij} $:
 
 $$
 \mathbf{n}_i \cdot \left(\sum_{j=1}^{N}\sigma_j\,\mathbf{vel}_{ij}\right)
