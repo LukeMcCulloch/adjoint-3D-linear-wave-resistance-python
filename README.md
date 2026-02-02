@@ -1,12 +1,12 @@
 # adjoint-3D-linear-wave-resistance-python
 a 3D BEM solver, optimization, and panel modification scheme for wave resistance using the generalized, linearized free surface conditions and Rankine sources
 
-## Forward Solver: the initial physics solver developmetn effort
+# Forward Solver: the initial physics solver developmetn effort
 
 <!-- -------------------------------------------------------------- 
 -->
 
-# Steady Linear Wave-Resistance Panel Solver Notes (Rankine Sources + Discretized Free Surface)
+Steady Linear Wave-Resistance Panel Solver Notes (Rankine Sources + Discretized Free Surface)
 
 These notes document the **discrete** solver we are implementing (and matching to the original Fortran), including:
 - unknowns (source strengths)
@@ -101,11 +101,6 @@ In NumPy:
 vtotal = -vinf[None,:] + np.einsum("ijm,j->im", vel, sigma)
 ```
 
-<!--  ----------------------------------------------------------------
--->
-
-
-* starting from a python version of my old 3d linear wave resistance code
 
 
 <!-- -----------------------------------------------------------------
@@ -449,10 +444,17 @@ If we later want a continuous derivation section, we can add it, but the above c
 <!-- -----------------------------------------------------------------
  -->
  
+<!--  ----------------------------------------------------------------
+-->
+
  
 <!-- -----------------------------------------------------------------
  -->
 # Discrete Adjoint for Shape Optimization (Full Derivation)
+
+
+
+Starting from a python version of my old 3d linear wave resistance code, what do we do to built it into an adjoint solver and physics driven design optimization tool?
 
 This note re-connects the math to the code. We start from the **discrete** physics
 $$
