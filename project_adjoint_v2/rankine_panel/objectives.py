@@ -118,6 +118,8 @@ class SourceStrengthGradients(object):
         Analytic dJ/dsigma for J = -F_x.
         
         dJ/d sigma => d Fx / d sigma
+        
+        (please review the definition of sigma (and Fx)
 
         With your force definition, for wetted hull panels:
           dJ/dv_i = d(-Fx)/dv = (-)-rho * area_i * n_ix * v_i

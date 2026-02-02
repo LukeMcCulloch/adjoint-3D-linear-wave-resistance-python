@@ -394,7 +394,9 @@ class RankineWaveResistanceSolver:
         #             vinf, 
         #             rho_water = rho_water, 
         #             rho_ref = self.params.rho_ref)
-        
+        #
+        # LHS of adjoint equations = A^T => LU decomposition above as ( lu , piv )
+        # RHS of adjoint equations = dj/dsigma  (could also have dj/dm I think - it just changes how you sub it in later)
         dJ_dsigma = SourceStrengthGradients.compute_dJ_dsigma_JnegFx(
             vel=vel, vtotal=vtotal,
             normals=normals,

@@ -5,6 +5,351 @@ a 3D BEM solver, optimization, and panel modification scheme for wave resistance
 * starting from a python version of my old 3d linear wave resistance code
 
 
+<!-- -----------------------------------------------------------------
+ -->
+
+# Discrete Adjoint for Shape Optimization (Full Derivation)
+
+This note re-connects the math to the code. We start from the **discrete** physics
+\[
+R(m,\sigma)=0
+\]
+and a scalar objective
+\[
+J(m,\sigma)
+\]
+and derive the adjoint equation and the final shape gradient.
+
+Throughout:
+- \(m\in\mathbb{R}^k\) are design variables (shape parameters)
+- \(\sigma\in\mathbb{R}^N\) are the state unknowns (source strengths)
+- \(R(m,\sigma)\in\mathbb{R}^N\) is the discrete residual (the assembled boundary conditions)
+- \(J(m,\sigma)\in\mathbb{R}\) is the objective (e.g. \(J=-F_x\) or \(J=c_w\))
+
+> **Important sign/notation point:** There are two common conventions for the Lagrangian.
+> They lead to the same final gradient if used consistently, but they differ by a sign
+> in the adjoint equation.
+
+---
+
+## 1. Discrete Physics as a Residual
+
+Our forward solver is a residual equation
+\[
+R(m,\sigma)=0.
+\]
+
+For the Rankine-source panel method, the residual is typically linear in \(\sigma\):
+\[
+R(m,\sigma) = A(m)\,\sigma - b(m) = 0.
+\]
+
+- \(A(m)\in\mathbb{R}^{N\times N}\) is the influence matrix (depends on geometry \(m\))
+- \(b(m)\in\mathbb{R}^N\) is the RHS (also depends on geometry \(m\))
+- \(\sigma\in\mathbb{R}^N\) is the state
+
+So:
+\[
+R_\sigma \equiv \frac{\partial R}{\partial \sigma} = A(m),\quad
+R_m \equiv \frac{\partial R}{\partial m} = A_m(m)\,\sigma - b_m(m),
+\]
+where \(A_m\) is a third-order tensor; in practice we apply it as a product \(A_m\,\sigma\).
+
+---
+
+## 2. Objective
+
+We choose an objective such as:
+
+### 2.1 Start objective (recommended first): \(J=-F_x\)
+\[
+J(m,\sigma) = -F_x(m,\sigma).
+\]
+
+### 2.2 Normalized wave resistance coefficient: \(J=c_w\)
+\[
+c_w = -\frac{F_x}{\tfrac12\rho_{\text{ref}}U^2 S(m)}.
+\]
+
+When differentiating w.r.t. \(\sigma\), the denominator is constant (it depends on geometry and flow parameters, not \(\sigma\)).
+When differentiating w.r.t. \(m\), the denominator contributes extra terms via \(S(m)\).
+
+---
+
+## 3. Total Derivative We Want
+
+We want the gradient
+\[
+\frac{dJ}{dm}
+\]
+accounting for the fact that \(\sigma=\sigma(m)\) is implicitly defined by \(R(m,\sigma(m))=0\).
+
+By the chain rule:
+\[
+\frac{dJ}{dm} = J_m + J_\sigma \,\sigma_m,
+\]
+where:
+- \(J_m = \frac{\partial J}{\partial m}\) (explicit dependence on geometry)
+- \(J_\sigma = \frac{\partial J}{\partial \sigma}\) (sensitivity to the state)
+- \(\sigma_m = \frac{d\sigma}{dm}\) (implicit response of the state to geometry)
+
+---
+
+## 4. Differentiate the Constraint to Get \(\sigma_m\)
+
+Differentiate \(R(m,\sigma(m))=0\) w.r.t. \(m\):
+
+\[
+R_m + R_\sigma \,\sigma_m = 0
+\]
+
+So:
+\[
+\sigma_m = - R_\sigma^{-1} R_m.
+\]
+
+Plug into the total derivative:
+\[
+\frac{dJ}{dm} = J_m - J_\sigma \,R_\sigma^{-1} R_m.
+\]
+
+This is correct but expensive because it involves \(R_\sigma^{-1}\) applied to something **for every design variable**.
+
+---
+
+## 5. Adjoint Trick
+
+We introduce an adjoint vector \(\lambda\in\mathbb{R}^N\) to avoid computing \(\sigma_m\).
+
+Define \(\lambda\) by:
+\[
+R_\sigma^T \lambda = J_\sigma^T.
+\]
+
+Then
+\[
+J_\sigma \,R_\sigma^{-1} R_m
+= (J_\sigma^T)^T R_\sigma^{-1} R_m
+= (R_\sigma^T\lambda)^T R_\sigma^{-1} R_m
+= \lambda^T R_\sigma R_\sigma^{-1} R_m
+= \lambda^T R_m.
+\]
+
+Therefore the full shape gradient becomes:
+\[
+\boxed{
+\frac{dJ}{dm} = J_m - \lambda^T R_m
+}
+\]
+
+This is the key result.
+
+### For linear residual \(R=A\sigma-b\)
+\[
+R_\sigma = A,\quad R_m = A_m\sigma - b_m
+\]
+so:
+\[
+\boxed{
+\frac{dJ}{dm} = J_m - \lambda^T (A_m\sigma - b_m)
+= J_m + \lambda^T (b_m - A_m\sigma)
+}
+\]
+
+---
+
+## 6. Two Common Lagrangian Conventions (Sign Confusion Resolved)
+
+### Convention A (most common in PDE-constrained optimization)
+\[
+\mathcal{L}(m,\sigma,\lambda) = J(m,\sigma) + \lambda^T R(m,\sigma).
+\]
+
+Stationarity w.r.t. \(\sigma\):
+\[
+\frac{\partial \mathcal{L}}{\partial \sigma}
+= J_\sigma + R_\sigma^T \lambda = 0
+\quad\Rightarrow\quad
+\boxed{
+R_\sigma^T \lambda = -J_\sigma^T
+}
+\]
+
+Then the gradient becomes:
+\[
+\boxed{
+\frac{dJ}{dm} = J_m + \lambda^T R_m
+}
+\]
+(because this \(\lambda\) has the opposite sign relative to the earlier definition).
+
+### Convention B (matches the "adjoint trick" definition used above)
+\[
+\mathcal{L}(m,\sigma,\lambda) = J(m,\sigma) - \lambda^T R(m,\sigma).
+\]
+
+Stationarity w.r.t. \(\sigma\):
+\[
+\frac{\partial \mathcal{L}}{\partial \sigma}
+= J_\sigma - R_\sigma^T \lambda = 0
+\quad\Rightarrow\quad
+\boxed{
+R_\sigma^T \lambda = J_\sigma^T
+}
+\]
+
+Then the gradient becomes:
+\[
+\boxed{
+\frac{dJ}{dm} = J_m - \lambda^T R_m
+}
+\]
+
+> **Bottom line:** both are correct. They differ only by the sign convention for \(\lambda\).
+> Pick one convention and stick to it.
+
+---
+
+## 7. Why You Sometimes See \(A^T\lambda = -R_m\)
+
+If you are deriving the adjoint from the physics **to get \(\sigma_m\)** (i.e., the tangent/forward sensitivity),
+you may write:
+
+From:
+\[
+R_\sigma \sigma_m = -R_m
+\]
+you can solve for \(\sigma_m\) directly:
+\[
+A\,\sigma_m = -(A_m\sigma - b_m).
+\]
+
+If you introduce an adjoint-like variable to avoid forming \(\sigma_m\), you *might* write a system like
+\[
+A^T \lambda = -R_m
+\]
+but note:
+
+- This \(\lambda\) is **not** the objective adjoint. It is an auxiliary variable related to the constraint derivative.
+- The standard discrete adjoint for optimizing \(J\) is:
+  \[
+  A^T \lambda = J_\sigma^T
+  \]
+  (or with a minus depending on Lagrangian sign).
+
+So:
+- \(A^T\lambda = J_\sigma^T\) is the **adjoint equation for optimizing**.
+- \(A\,\sigma_m = -R_m\) is the **tangent equation** for state sensitivity.
+- Writing \(A^T\lambda = -R_m\) is mixing roles unless you are defining a different multiplier.
+
+---
+
+## 8. What Gradients Do We Need in the Code?
+
+For a gradient-based shape update, at each iteration:
+
+### Step 1: Forward solve (state)
+Solve the residual:
+\[
+R(m,\sigma)=0 \quad\Rightarrow\quad A(m)\sigma=b(m).
+\]
+
+### Step 2: Evaluate objective
+Compute:
+\[
+J(m,\sigma).
+\]
+
+### Step 3: Compute state sensitivity of objective
+Compute:
+\[
+g_\sigma = J_\sigma \in\mathbb{R}^N.
+\]
+
+Example (for \(J=-F_x\)), this is what we validated numerically:
+\[
+g_{\sigma,j} = \sum_i \left(\frac{\partial J}{\partial v_i}\cdot vel_{ij}\right).
+\]
+
+### Step 4: Adjoint solve
+Solve:
+\[
+A(m)^T \lambda = g_\sigma^T
+\]
+(or \(= -g_\sigma^T\) depending on your Lagrangian convention).
+
+### Step 5: Compute shape gradient
+Compute:
+\[
+\frac{dJ}{dm} = J_m + \lambda^T (b_m - A_m\sigma)
+\]
+(or the sign-flipped equivalent).
+
+In practice:
+- Compute \(b_m\) (vector)
+- Compute \(w = A_m\sigma\) (vector), without forming \(A_m\)
+- Combine:
+  \[
+  \lambda^T (b_m - w)
+  \]
+
+### Step 6: Apply update
+Update design variables:
+\[
+m \leftarrow m - \alpha \, \nabla_m J
+\]
+(with line search / trust region / constraints).
+
+---
+
+## 9. Boundary Conditions for the Adjoint
+
+In the **discrete adjoint**, the “boundary conditions” are automatically encoded by the discrete operator \(A(m)\):
+
+- The forward BCs are enforced by assembling \(A\) and \(b\) from:
+  - hull no-penetration
+  - free-surface linearized BC (generalized kinematic+dynamic)
+- The adjoint system uses \(A^T\), meaning the coupling of equations is transposed, but **no new continuous BC derivation is required**.
+
+So in code:
+- forward: solve `A sigma = b`
+- adjoint: solve `A.T lam = dJ_dsigma`
+
+---
+
+## 10. Summary (Implementation Checklist)
+
+At each shape iteration:
+
+1. **Assemble** \(A(m), b(m)\)
+2. **Solve forward** \(A\sigma=b\)
+3. **Compute objective** \(J(m,\sigma)\)
+4. **Compute RHS** \(g_\sigma = \partial J/\partial \sigma\)
+5. **Solve adjoint** \(A^T\lambda=g_\sigma^T\)
+6. **Compute shape gradient**
+   \[
+   \frac{dJ}{dm} = J_m + \lambda^T(b_m - A_m\sigma)
+   \]
+7. **Update shape** \(m \leftarrow m - \alpha \nabla_m J\)
+
+---
+
+## 11. Practical Notes for Our Current Code
+
+- We validated \(g_\sigma=\partial(-F_x)/\partial\sigma\) using FD directional checks.
+- We validated the adjoint solve residual \(\|A^T\lambda-g_\sigma\|/\|g_\sigma\|\) is near machine precision.
+- For the beam-scaling test, we validated:
+  \[
+  \frac{dJ}{dm} \approx \underbrace{\frac{\partial J}{\partial m}\Big|_{\sigma}}_{\text{explicit}} + \underbrace{\lambda^T(b_m - A_m\sigma)}_{\text{implicit}}
+  \]
+  and matched full FD to high accuracy.
+
+Next development step:
+- Implement the implicit term \(b_m - A_m\sigma\) without finite differences, e.g. via complex-step or analytic/AD inside the residual evaluation.
+
+<!--  ----------------------------------------------------------------
+-->
+
 ## Converting Forward Physics to a full on Adjoint Solver
 
 #### 1.) Switching to LU and Reusing It for the Adjoint (Discrete Adjoint Setup)
