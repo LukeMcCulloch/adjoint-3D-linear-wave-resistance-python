@@ -2,6 +2,7 @@
 a 3D BEM solver, optimization, and panel modification scheme for wave resistance using the generalized, linearized free surface conditions and Rankine sources
 
 
+
 # Adjoint derivation
 
 Free variables of the optimization:
@@ -1815,6 +1816,7 @@ then the adjoint gives you gradients without ever forming $dx/dm$:
 So the common hybrid is:
 
 - Hand/implicit adjoint for the physics solve,
+- AD to provide $\partial A/\partial m$, $\partial b/\partial m$, and $\partial J/\partial m$ (via geometry derivatives), at least initially.
 
 ## python package requirements
 * numpy, scipy, matplotlib
