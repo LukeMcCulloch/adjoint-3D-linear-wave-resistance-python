@@ -1,7 +1,148 @@
 # adjoint-3D-linear-wave-resistance-python
 a 3D BEM solver, optimization, and panel modification scheme for wave resistance using the generalized, linearized free surface conditions and Rankine sources
 
-# Forward Solver: the initial physics solver developmetn effort
+
+# Adjoint derivation
+
+Free variables of the optimization:
+* $sigma = $ source strengths (the 'u' of our physics)
+* $m = $ geometry: perhaps parameterized in some way as shape variables
+* $\lambda = $ the Lagrange multipliers, aka the adjoint variables 
+* $J = $ our objective
+* $R = $ the resiudal of our physics
+
+$$
+\mathcal{L} = J\left( m, \sigma\left(m\right) \right) + \lambda\left(R\left( m, \sigma \left(m\right)  \right) \right)
+$$
+
+* we note that geometry $m$ is not a function of $\sigma$  but $\sigma$ is a function of m. $ \sigma = \sigma\left(m\right)$ 
+
+With nothing but the above in hand, let's derive everything we need to do physics driven optimization of our geometry.
+
+## First Order Necessary Condition (F.O.N.C.) 
+The system gradient must be equal to 0 at the minimum.  (at an extrema or critical point)
+
+<!-- $ \frac{\partial J}{\partial m}  \frac{\partial m}{\partial \sigma} $ -->
+    
+
+$\frac{\partial \mathcal{L}}{\partial \sigma} = \mathcal{L}_\sigma = \frac{\partial J}{\partial \sigma}   + \lambda \frac{\partial R}{\partial \sigma} \frac{\partial \sigma}{\partial m} = 0$
+
+
+$\frac{\partial \mathcal{L}}{\partial m} = \mathcal{L}_m = \frac{\partial J}{\partial m}   + \lambda \frac{\partial R}{\partial m} = 0$
+
+
+$\frac{\partial \mathcal{L}}{\partial \lambda} = \mathcal{L}_\lambda = R = 0$
+
+## Solution Process
+
+* Solve for the $\sigma$ that drivec the residual $R$ to 0.
+
+    $R = A\sigma -b = 0$
+    * note that for the problem we solve in this repo, $A = A\left( m \right)$
+
+* Now we note the adjoint trick:
+
+
+
+
+## Lambda gradient trick, (adoint trick, part 1)
+
+$\mathcal{L}_\sigma = \frac{\partial J}{\partial \sigma}   + \lambda \frac{\partial R}{\partial \sigma}  = 0$
+
+so
+
+
+$\frac{\partial J}{\partial \sigma}   = - \lambda \frac{\partial R}{\partial \sigma}  $
+
+or, in linear system form:
+
+
+$$  \frac{\partial R}{\partial \sigma} \lambda  = - \frac{\partial J}{\partial \sigma} $$
+
+$$  \lambda  = - \left[\frac{\partial R}{\partial \sigma}\right] ^{-1} \frac{\partial J}{\partial \sigma} $$
+
+we will come back to this.  Call this substitution 2.
+
+
+
+
+## The shape gradients $\mathcal{L}_m$, (adjoint trick, part 2)
+
+expanding the implicit gradient with respect to m, we have:
+
+$$ \mathcal{L}_m = \frac{\partial J}{\partial m}   +    \frac{\partial J}{\partial \sigma}  \frac{\partial \sigma}{\partial m} +  \lambda \left( \frac{\partial R}{\partial m} +\frac{\partial R}{\partial \sigma} \frac{\partial \sigma}{\partial m} \right) = 0$$
+
+* the $\frac{\partial \sigma}{\partial m}$ are very hard to obtain by traditional methods.
+
+* note first that we have the fact that the residual of our Physics is going to be 0, therefore:
+
+$$ \left( \frac{\partial R}{\partial m} +\frac{\partial R}{\partial \sigma} \frac{\partial \sigma}{\partial m} \right) = 0 $$
+
+And thus we note:
+
+$$  \frac{\partial R}{\partial m} = -\frac{\partial R}{\partial \sigma} \frac{\partial \sigma}{\partial m}  $$
+
+or
+
+$$  \frac{\partial R}{\partial \sigma} \frac{\partial \sigma}{\partial m} = - \frac{\partial R}{\partial m}  $$
+
+$$  \frac{\partial \sigma}{\partial m} = - \left[ \frac{\partial R}{\partial \sigma}  \right]^{-1} \frac{\partial R}{\partial m}  $$
+
+
+Call the above, sustitution 1.
+
+
+
+
+## we use the adjoint trick substitutions (adjoint trick, part 3):
+
+
+$$ \mathcal{L}_m = \frac{\partial J}{\partial m}   +    \frac{\partial J}{\partial \sigma}  \frac{\partial \sigma}{\partial m} +  \lambda \left( \frac{\partial R}{\partial m} +\frac{\partial R}{\partial \sigma} \frac{\partial \sigma}{\partial m} \right) = 0$$
+
+
+sub in the adjoint definition $\frac{\partial R}{\partial \sigma} \lambda  = - \frac{\partial J}{\partial \sigma}$
+
+ $ \lambda  = - \left[ \frac{\partial R}{\partial \sigma} \right]^{-1} \frac{\partial J}{\partial \sigma}$ is easily obtainable with a single linear solve.  Since in our problem $R_\sigma = A$ we just solve the linear system for $\lambda$:
+
+ $$\frac{\partial R}{\partial \sigma} \lambda = - \frac{\partial J}{\partial \sigma} $$
+
+
+And we also saw above we have the residual relation $  \frac{\partial \sigma}{\partial m} = - \left[ \frac{\partial R}{\partial \sigma}  \right]^{-1} \frac{\partial R}{\partial m}  $
+
+so with all that, this:
+
+$$\frac{\partial J}{\partial m}   +    \frac{\partial J}{\partial \sigma}  \frac{\partial \sigma}{\partial m} +  \lambda \left( \frac{\partial R}{\partial m} +\frac{\partial R}{\partial \sigma} \frac{\partial \sigma}{\partial m} \right) = 0$$
+
+#### Using substitution 1, the above becomes this:
+
+$$\frac{\partial J}{\partial m}   -    \frac{\partial J}{\partial \sigma}  \left[ \frac{\partial R}{\partial \sigma}  \right]^{-1} \frac{\partial R}{\partial m}  +                                                          \lambda \left( \frac{\partial R}{\partial m}   -   \frac{\partial R}{\partial \sigma} \left[ \frac{\partial R}{\partial \sigma}  \right]^{-1} \frac{\partial R}{\partial m} \right) = 0$$
+
+* Asserting the subsitution is valid for the residual part is tatamount to saying the residual is zero?  In any case we are left with this (which does keep the dependence on the residual ;):
+
+$$\frac{\partial J}{\partial m}   -    \frac{\partial J}{\partial \sigma}  \left[ \frac{\partial R}{\partial \sigma}  \right]^{-1} \frac{\partial R}{\partial m}   = 0$$
+
+
+#### Using substitution 2, we get:
+
+
+$$\frac{\partial J}{\partial m}   -    \lambda^T\frac{\partial R}{\partial m}   = 0$$
+
+
+
+
+
+* note that I played fast and loose with the transposes.  I am pretty sure I left some out.  In my code, I keep $\lambda$'s as a column vector on the right $\lambda => \lambda^{T}$, eliminating much of these shinanigans.
+
+
+* writing this out for our problem, we see:
+
+   $$
+   \frac{dJ}{dm} = J_m + \lambda^T(b_m - A_m\sigma) = 0
+   $$
+
+
+
+# Forward Solver for $R$: the initial physics solver development effort
 
 <!-- -------------------------------------------------------------- 
 -->
@@ -153,9 +294,8 @@ $$
 Using $ \mathbf{v}_i = -\mathbf{v}_\infty + \sum_j \sigma_j\,\mathbf{vel}_{ij} $:
 
 $$
-\mathbf{n}_i \cdot \left(\sum_{j=1}^{N}\sigma_j\,\mathbf{vel}_{ij}\right)
-=
-\mathbf{n}_i \cdot \mathbf{v}_\infty
+\mathbf{n}_i \cdot \left(\sum_{j=1}^{N}\sigma_j\,\mathbf{vel}_{ij}\right) 
+    = \mathbf{n}_i \cdot \mathbf{v}_\infty
 $$
 
 So:
@@ -775,13 +915,15 @@ At each shape iteration:
 1. **Assemble** $A(m), b(m)$
 2. **Solve forward** $A\sigma=b$
 3. **Compute objective** $J(m,\sigma)$
-4. **Compute RHS** $g_\sigma = \partial J/\partial \sigma$
+4. **Compute RHS of the ajdoint equation** $g_\sigma = \partial J/\partial \sigma$
 5. **Solve adjoint** $A^T\lambda=g_\sigma^T$
 6. **Compute shape gradient**
    $$
    \frac{dJ}{dm} = J_m + \lambda^T(b_m - A_m\sigma)
    $$
 7. **Update shape** $m \leftarrow m - \alpha \nabla_m J$
+
+keep chugging until J is minimized
 
 ---
 
