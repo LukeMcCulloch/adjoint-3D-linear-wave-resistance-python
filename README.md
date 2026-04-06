@@ -116,28 +116,20 @@ $$
 \frac{dJ}{dm} = \frac{\partial{J}}{\partial{m}} + \frac{\partial{J}}{\partial{\sigma}} \frac{\partial{\sigma}}{\partial{m}}
 $$
 
-* plug in the constraint we just derived: $
-\frac{\partial{\sigma}}{\partial{m}}
-=
-−\left(\frac{\partial{R}}{\partial{\sigma}}\right)^{−1}
-\frac{\partial{R}}{\partial{m}} 
-$.
+* plug in the constraint we just derived: $\frac{\partial{\sigma}}{\partial{m}} = −\left(\frac{\partial{R}}{\partial{\sigma}}\right)^{−1}\frac{\partial{R}}{\partial{m}}$.
 
 
 $$
-\frac{dJ}{dm} = \frac{\partial{J}}{\partial{m}} - \frac{\partial{J}}{\partial{\sigma}}  
-
-\left( \frac{\partial{R}}{\partial{\sigma}} \right)^{−1} \frac{\partial{R}}{\partial{m}} 
+\frac{dJ}{dm} = \frac{\partial{J}}{\partial{m}} - \frac{\partial{J}}{\partial{\sigma}} \left( \frac{\partial{R}}{\partial{\sigma}} \right)^{−1} \frac{\partial{R}}{\partial{m}} 
 $$
 
 * But notice now that, after substitution, a different pair of terms matches the Lagrange multiplier equations we chose above:  $\frac{\partial R}{\partial \sigma}^T \lambda = - \frac{\partial J}{\partial \sigma}$
 
 
 $$
-\frac{dJ}{dm} = \frac{\partial{J}}{\partial{m}} - 
-
-\lambda^T \frac{\partial{R}}{\partial{m}} 
+\frac{dJ}{dm} = \frac{\partial{J}}{\partial{m}} - \lambda^T \frac{\partial{R}}{\partial{m}} 
 $$
+
 * This is the payoff!  We avoided the computation of $\frac{\partial{\sigma}}{\partial{m}}$ 
 
 
