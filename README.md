@@ -96,6 +96,8 @@ R(m,σ(m))=0⇒
 = 0 
 $$
 
+or 
+
 $$
 \frac{\partial{\sigma}}{\partial{m}}
 =
@@ -110,7 +112,7 @@ $$
 The constraint is just above.  Here is the adjoint equation we chose:
 
 
-$$    \frac{\partial R}{\partial \sigma}^T \lambda = - \frac{\partial J}{\partial \sigma}$$
+$$\frac{\partial R}{\partial \sigma}^T \lambda = - \frac{\partial J}{\partial \sigma}$$
 
 
 sub that into the total derivative for J with respect to m $\frac{\partial J}{\partial m}$
