@@ -89,20 +89,13 @@ Differentiate the constraint:
 
 $$
 R(m,σ(m))=0⇒
-\frac{\partial{R}}{\partial{m}}
-+
-\frac{\partial{R}}{\partial{\sigma}}
-\frac{\partial{\sigma}}{\partial{m}}
-= 0 
+\frac{\partial{R}}{\partial{m}} + \frac{\partial{R}}{\partial{\sigma}} \frac{\partial{\sigma}}{\partial{m}} = 0 
 $$
 
 or 
 
 $$
-\frac{\partial{\sigma}}{\partial{m}}
-=
-−\left(\frac{\partial{R}}{\partial{\sigma}}\right)^{−1}
-\frac{\partial{R}}{\partial{m}} 
+\frac{\partial{\sigma}}{\partial{m}} = −\left(\frac{\partial{R}}{\partial{\sigma}}\right)^{−1}\frac{\partial{R}}{\partial{m}} 
 $$
 
 
