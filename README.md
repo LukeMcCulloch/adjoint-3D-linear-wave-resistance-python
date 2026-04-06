@@ -7,11 +7,11 @@ a 3D BEM solver, optimization, and panel modification scheme for wave resistance
 # Adjoint derivation
 
 Free variables of the optimization:
-* $\sigma = $ source strengths (the 'u' of our physics)
-* $m = $ geometry: perhaps parameterized in some way as shape variables
-* $\lambda = $ the Lagrange multipliers, aka the adjoint variables 
-* $J = $ our objective
-* $R = $ the resiudal of our physics
+* $\sigma$ : source strengths (the 'u' of our physics)
+* $m$ : geometry: perhaps parameterized in some way as shape variables
+* $\lambda$ : the Lagrange multipliers, aka the adjoint variables 
+* $J$ : our objective
+* $R$ : the resiudal of our physics
 
 $$
 \mathcal{L} = J\left( m, \sigma\left(m\right) \right) + \lambda\left(R\left( m, \sigma \left(m\right)  \right) \right)
