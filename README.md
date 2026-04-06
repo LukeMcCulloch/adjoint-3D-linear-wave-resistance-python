@@ -49,11 +49,11 @@ $\frac{\partial \mathcal{L}}{\partial \sigma} = \mathcal{L}_\sigma = \frac{\part
 
 * Here is one adjoint equation that we can get:
 
-$ \frac{\partial R}{\partial m}^T \lambda  = - \frac{\partial J}{\partial m}  $
+$\frac{\partial R}{\partial m}^T \lambda  = - \frac{\partial J}{\partial m}$
 
 * and here is another:
 
-$    \frac{\partial R}{\partial \sigma}^T \lambda = - \frac{\partial J}{\partial \sigma}$ 
+$\frac{\partial R}{\partial \sigma}^T \lambda = - \frac{\partial J}{\partial \sigma}$ 
 
 * we will be using the second form next.
 
