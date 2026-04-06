@@ -104,7 +104,7 @@ $$
 $$
 
 
-### Using the constraint, plug in and eliminate $\frac{\partial{\sigma}}{\partial{m}} $ using the adjoint:
+### Using the constraint, plug in and eliminate $\frac{\partial{\sigma}}{\partial{m}}$ using the adjoint:
 
 
 The constraint is just above.  Here is the adjoint equation we chose:
