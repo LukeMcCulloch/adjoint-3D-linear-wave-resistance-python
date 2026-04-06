@@ -145,3 +145,41 @@ class ShapeGradients(object):
     D J / D m
     '''
     
+    
+    
+    def residual_apply(m, sigma_fixed):
+        """
+        Return r(m) = A(m) @ sigma_fixed - b(m)
+        Must be complex-safe if using complex-step.
+        """
+        # 1) build geometry from m  (allow complex)
+        # 2) assemble/apply A(m) to sigma_fixed (prefer matrix-free apply if you have it)
+        # 3) assemble b(m)
+        # 4) return A_sigma - b
+        return #r
+    
+    def bm_minus_Am_sigma(m0, sigma_fixed, eps=1e-30):
+        '''
+        Parameters
+        ----------
+        m0 : TYPE
+            DESCRIPTION.
+        sigma_fixed : TYPE
+            DESCRIPTION.
+        eps : TYPE, optional
+            DESCRIPTION. The default is 1e-30.
+
+        Returns
+        -------
+        TYPE
+            The gradient of the residual physics with respect to the geometry variables m
+            
+        No need for explicit 
+        A_m storing of derivative matrices
+        Only requires your geometry + influence evaluation to be complex-safe.
+        Gives a very strong correctness oracle for whatever you later do with reverse-mode or hand-coded sensitivities.
+
+        '''
+        r = residual_apply(m0 + 1j*eps, sigma_fixed)
+        rm = np.imag(r) / eps
+        return -rm

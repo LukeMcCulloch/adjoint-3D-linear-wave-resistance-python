@@ -406,7 +406,7 @@ class RankineWaveResistanceSolver:
             rho_water=rho_water
         )
         #-------------------------------
-        # ADJOINT SOLVE        
+        # ADJOINT SOLVE     for   dsigma/dm using  A^T = dR/dsigma and RHS dJ/dsigma
         #
         lam = lu_solve((lu, piv), dJ_dsigma, trans=1)  # adjoint: A^T lam = dJ/dsigma
         #

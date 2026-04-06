@@ -3,6 +3,10 @@
 Created on Wed Jan 14 22:40:34 2026
 
 @author: Luke McCulloch
+
+
+Forward Speed Linear Wave Resistance Solver test:
+Run the Physics Solver and Plot the Results
 """
 
 # path modification to run the package code from here

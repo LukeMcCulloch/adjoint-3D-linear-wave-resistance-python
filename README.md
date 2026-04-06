@@ -7,7 +7,7 @@ a 3D BEM solver, optimization, and panel modification scheme for wave resistance
 # Adjoint derivation
 
 Free variables of the optimization:
-* $sigma = $ source strengths (the 'u' of our physics)
+* $\sigma = $ source strengths (the 'u' of our physics)
 * $m = $ geometry: perhaps parameterized in some way as shape variables
 * $\lambda = $ the Lagrange multipliers, aka the adjoint variables 
 * $J = $ our objective
@@ -21,23 +21,137 @@ $$
 
 With nothing but the above in hand, let's derive everything we need to do physics driven optimization of our geometry.
 
+
+
 ## First Order Necessary Condition (F.O.N.C.) 
+
 The system gradient must be equal to 0 at the minimum.  (at an extrema or critical point)
 
-<!-- $ \frac{\partial J}{\partial m}  \frac{\partial m}{\partial \sigma} $ -->
-    
-
-$\frac{\partial \mathcal{L}}{\partial \sigma} = \mathcal{L}_\sigma = \frac{\partial J}{\partial \sigma}   + \lambda \frac{\partial R}{\partial \sigma} \frac{\partial \sigma}{\partial m} = 0$
+$\frac{\partial \mathcal{L}}{\partial \sigma} = \mathcal{L}_\sigma = \frac{\partial J}{\partial \sigma}   + \frac{\partial R}{\partial \sigma}^T \lambda = 0$ 
 
 
-$\frac{\partial \mathcal{L}}{\partial m} = \mathcal{L}_m = \frac{\partial J}{\partial m}   + \lambda \frac{\partial R}{\partial m} = 0$
+$\frac{\partial \mathcal{L}}{\partial m} = \mathcal{L}_m = \frac{\partial J}{\partial m}   + \frac{\partial R}{\partial m}^T \lambda  = 0$
 
 
 $\frac{\partial \mathcal{L}}{\partial \lambda} = \mathcal{L}_\lambda = R = 0$
 
+
+
+## the adjoint equation
+
+Again we have,
+
+$\frac{\partial \mathcal{L}}{\partial m} = \mathcal{L}_m = \frac{\partial J}{\partial m}   + \frac{\partial R}{\partial m}^T \lambda  = 0$
+
+
+$\frac{\partial \mathcal{L}}{\partial \sigma} = \mathcal{L}_\sigma = \frac{\partial J}{\partial \sigma}   + \frac{\partial R}{\partial \sigma}^T \lambda = 0$ 
+
+
+* Here is one adjoint equation that we can get:
+
+$ \frac{\partial R}{\partial m}^T \lambda  = - \frac{\partial J}{\partial m}  $
+
+* and here is another:
+
+$    \frac{\partial R}{\partial \sigma}^T \lambda = - \frac{\partial J}{\partial \sigma}$ 
+
+* we will be using the second form next.
+
+
+
+## Total Derivative of the Constrained Objective
+
+$$
+\frac{d}{dm}J\left( m, \sigma\left(m\right)\right)
+$$
+
+chain rule:
+
+$$
+\frac{dJ}{dm} = \frac{\partial{J}}{\partial{m}} + \frac{\partial{J}}{\partial{\sigma}} \frac{\partial{\sigma}}{\partial{m}}
+$$
+
+But,
+$\frac{\partial{\sigma}}{\partial{m}}$
+is very expensive to compute directly
+
+
+$$  \frac{\partial{J}}{\partial{\sigma}}  $$
+
+$$  \frac{\partial{R}}{\partial{m}}  $$
+
+$$  \frac{\partial{R}}{\partial{\sigma}}  $$
+
+$$ \frac{\partial{\sigma}}{\partial{m}} $$
+
+
+Differentiate the constraint:
+
+$$
+R(m,σ(m))=0⇒
+\frac{\partial{R}}{\partial{m}}
++
+\frac{\partial{R}}{\partial{\sigma}}
+\frac{\partial{\sigma}}{\partial{m}}
+= 0 
+$$
+
+$$
+\frac{\partial{\sigma}}{\partial{m}}
+=
+−\left(\frac{\partial{R}}{\partial{\sigma}}\right)^{−1}
+\frac{\partial{R}}{\partial{m}} 
+$$
+
+
+### Using the constraint, plug in and eliminate $\frac{\partial{\sigma}}{\partial{m}} $ using the adjoint:
+
+
+The constraint is just above.  Here is the adjoint equation we chose:
+
+
+$$    \frac{\partial R}{\partial \sigma}^T \lambda = - \frac{\partial J}{\partial \sigma}$$
+
+
+sub that into the total derivative for J with respect to m $\frac{\partial J}{\partial m}$
+
+* the total derivative is
+
+$$
+\frac{dJ}{dm} = \frac{\partial{J}}{\partial{m}} + \frac{\partial{J}}{\partial{\sigma}} \frac{\partial{\sigma}}{\partial{m}}
+$$
+
+* plug in the constraint we just derived: $
+\frac{\partial{\sigma}}{\partial{m}}
+=
+−\left(\frac{\partial{R}}{\partial{\sigma}}\right)^{−1}
+\frac{\partial{R}}{\partial{m}} 
+$.
+
+
+$$
+\frac{dJ}{dm} = \frac{\partial{J}}{\partial{m}} - \frac{\partial{J}}{\partial{\sigma}}  
+
+\left( \frac{\partial{R}}{\partial{\sigma}} \right)^{−1} \frac{\partial{R}}{\partial{m}} 
+$$
+
+* But notice now that, after substitution, a different pair of terms matches the Lagrange multiplier equations we chose above:  $\frac{\partial R}{\partial \sigma}^T \lambda = - \frac{\partial J}{\partial \sigma}$
+
+
+$$
+\frac{dJ}{dm} = \frac{\partial{J}}{\partial{m}} - 
+
+\lambda^T \frac{\partial{R}}{\partial{m}} 
+$$
+* This is the payoff!  We avoided the computation of $\frac{\partial{\sigma}}{\partial{m}}$ 
+
+
+
+
+
 ## Solution Process
 
-* Solve for the $\sigma$ that drivec the residual $R$ to 0.
+* Solve for the $\sigma$ that drives the residual $R$ to 0.
 
     $R = A\sigma -b = 0$
     * note that for the problem we solve in this repo, $A = A\left( m \right)$
@@ -72,7 +186,12 @@ we will come back to this.  Call this substitution 2.
 
 expanding the implicit gradient with respect to m, we have:
 
-$$ \mathcal{L}_m = \frac{\partial J}{\partial m}   +    \frac{\partial J}{\partial \sigma}  \frac{\partial \sigma}{\partial m} +  \lambda \left( \frac{\partial R}{\partial m} +\frac{\partial R}{\partial \sigma} \frac{\partial \sigma}{\partial m} \right) = 0$$
+$$ \mathcal{L}_m = \frac{\partial J}{\partial m}   
++    
+\frac{\partial J}{\partial \sigma}  \frac{\partial \sigma}{\partial m} 
++  
+\lambda \left( \frac{\partial R}{\partial m} +
+\frac{\partial R}{\partial \sigma} \frac{\partial \sigma}{\partial m} \right) = 0$$
 
 * the $\frac{\partial \sigma}{\partial m}$ are very hard to obtain by traditional methods.
 
@@ -1762,6 +1881,8 @@ The difference you see
 
 
 
+
+
 ## Dev Notes: Automatic Differentiation and Adjoint derivatives
 
 ## Gradients: where AD helps vs where adjoint helps
@@ -1805,6 +1926,9 @@ then the adjoint gives you gradients without ever forming $dx/dm$:
   \right)
   $$
 
+
+
+
 ## Where AD is usually a win
 
 - Geometry parameterization: B-splines \(\rightarrow\) surface points, normals, Jacobians, constraints.
@@ -1817,7 +1941,108 @@ then the adjoint gives you gradients without ever forming $dx/dm$:
 So the common hybrid is:
 
 - Hand/implicit adjoint for the physics solve,
-- AD to provide $\partial A/\partial m$, $\partial b/\partial m$, and $\partial J/\partial m$ (via geometry derivatives), at least initially.
+- AD to provide $\partial A/\partial m$, $\partial b/\partial m$, and $\partial J / \partial m$ (via geometry derivatives), at least initially.
+
+
+
+
+
+
+## How to incorporate complex-step into your adjoint wave-drag solver
+
+This is the high-value integration idea you asked for.
+
+### What we want to do:
+
+Avoid forming $A_m$. Compute
+
+$$
+b_m - A_m\,\sigma
+$$
+
+matrix-free using **complex-step** on the residual apply.
+
+### Pattern
+
+Hold $\sigma$ fixed and define:
+
+$$
+r(m) = A(m)\,\sigma - b(m).
+$$
+
+Then:
+
+$$
+b_m - A_m\,\sigma = -\,r_m.
+$$
+
+So implement a function in your solver code that only does **“apply residual at fixed sigma”**.
+
+
+---
+
+# VJP = Vector Jacobian Product
+
+## What this demonstrates (and why it’s gold for adjoints)
+
+If you define
+
+$$
+R(m) := r(m)
+\qquad\text{and}\qquad
+\phi(m) = \lambda^T R(m),
+$$
+
+then
+
+$$
+\nabla_m \phi(m)
+=
+\left(\frac{\partial R}{\partial m}(m)\right)^T \lambda
+=
+R_m(m)^T \lambda.
+$$
+
+So complex-step on the scalar $\phi$ gives you the **VJP** you actually want in adjoint land.
+
+
+
+
+
+
+
+--- 
+# Gradients of the Adjoint Method
+
+with $\mathcal{L} = J + \lambda^T R$ and differentiation with respect to lambda giving the Physics itself, we really only need:
+
+1) $J_{\sigma}$
+2) $R_{\sigma}$
+2) $J_{m}$
+2) $R_{m}$
+
+## Natural
+* linear system so $R = A\sigma - b$ gives $\frac{\partial R}{\partial \sigma} = R_{\sigma} = A$
+
+## Adjoint 
+
+* replace $\frac{\partial \sigma}{\partial m} $ with a linear solve
+  * forward: $A\sigma = b$
+  * backward:  $A^T \lambda = J_{\sigma}^T$
+
+## Hand Coded
+
+* $J_{\sigma}$
+
+
+## Automatic Differentiation
+* $\frac{\partial J}{\partial m}$
+* $ R_m = \lambda^{T} \left( b_m - A_m \sigma\right) $
+
+
+
+
+---
 
 ## python package requirements
 * numpy, scipy, matplotlib
@@ -1827,3 +2052,4 @@ So the common hybrid is:
     * Here we adopt the github subset for maximal compatibility
     * so you do not need it
 
+---

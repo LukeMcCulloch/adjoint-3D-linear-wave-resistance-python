@@ -164,7 +164,9 @@ class Validate_dj_dsigma(object):
             
 
 class Validate_shape_gradient(object):
-    
+    """
+    """
+    # Geometry utilities for shape gradient checks.
     
     
     @staticmethod
@@ -188,7 +190,7 @@ class Validate_shape_gradient(object):
         idx = hull_verts
         mask = pts[2, idx] < z_cut
         idx2 = idx[mask]
-        pts[1, idx2] *= (1.0 + m) # change the hull's beam (witdth)
+        pts[1, idx2] *= (1.0 + m) # change the hull's beam (witdth) # works for complex m
         #wihtout introducing any geometry machinery
         return pts
     
