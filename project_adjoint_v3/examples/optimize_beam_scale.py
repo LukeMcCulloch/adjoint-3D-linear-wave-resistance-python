@@ -28,6 +28,14 @@ Note: each gradient evaluation costs 3 full geometry+influence assemblies
 (baseline, m+eps, m-eps), and each line-search trial costs 1 more. On the
 fifi.dat Wigley mesh (N=3360) one assembly takes on the order of ten seconds,
 so a handful of iterations takes several minutes. That's expected.
+
+TODO(AD): step 5's dA/dm, db/dm (inside
+gradient_validators.py::compute_beam_scale_gradient) are finite-differenced
+today. That's a deliberate stepping stone, not the destination -- see the
+TODO(AD) notes in gradient_validators.py and numba_kernels.py. It's fine for
+a single scalar shape parameter, but it must be replaced with analytic/AD
+derivatives before this scales to many-DOF (e.g. per-vertex) shape
+variables.
 """
 
 import os
