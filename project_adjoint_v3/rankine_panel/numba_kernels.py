@@ -239,6 +239,20 @@ if njit is not None:
     # -----------------------------
     # Numba assembly (returns A, b, vel)
     # vel[row, col, :] is stored so postprocessing is fast.
+    #
+    # TODO(AD, do not settle here): dA/dm, db/dm are currently obtained by
+    # finite-differencing *this whole function* (see
+    # gradient_validators.py::compute_beam_scale_gradient) at m0 +/- eps_m.
+    # That's a stopgap, not the destination -- it's ~50x more expensive per
+    # gradient call than it needs to be (this assembly dominates runtime;
+    # the LU solve is comparatively free), it's floored at FD accuracy, and
+    # it fundamentally does not scale past a handful of scalar shape
+    # parameters. Replace with analytic/AD dA_dm@sigma + db_dm computed
+    # alongside this same primal pass: forward-mode dual numbers here
+    # (confirmed numba-friendly, incl. jitclass operator overloading, as
+    # long as it's not a self-referential tape) for a modest parameter
+    # count, reverse-mode VJP (seeded by lam) for full per-vertex DOF --
+    # see README.md "Discrete Adjoint for Shape Optimization" / "VJP".
     # -----------------------------
     @njit(cache=True)
     def assemble_A_b_vel_nb(center, coordsys, cornerslocal, area,
