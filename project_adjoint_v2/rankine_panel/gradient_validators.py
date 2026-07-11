@@ -276,6 +276,26 @@ class Validate_shape_gradient(object):
             for cross-checking); an optimizer driving many gradient calls
             doesn't need it.
 
+        TODO(AD, do not leave this as the end state): dA/dm and db/dm below
+        are FD on the assembly, which is a legitimate stepping stone (it
+        still reuses lam, so it's not FD-through-the-solve) but NOT where we
+        want to land:
+          - it costs 2 extra full assemblies per gradient call, and assembly
+            (not the linear solve) is the dominant cost here (~19s vs ~0.35s
+            on the fifi.dat mesh) -- analytic/AD dA/dm cuts this to ~1
+            assembly.
+          - it's floored at ~1e-10 relative accuracy by eps_m/central-
+            differencing; analytic/AD is exact to machine precision.
+          - it does not scale: this scalar-m FD trick works because m is
+            1-D (one +eps and one -eps build of A,b). It will NOT scale to
+            per-vertex/many-DOF shape variables (that needs a real VJP of
+            A(points)@sigma and b(points) w.r.t. points, via forward-mode AD
+            for a modest parameter count or reverse-mode AD for full
+            per-vertex DOF -- see numba_kernels.py and README.md "Discrete
+            Adjoint for Shape Optimization").
+        Replace this FD block with an analytic/AD dA_dm@sigma and db_dm
+        before scaling beyond a handful of scalar shape parameters.
+
         Returns a dict with:
           J0, dJdm (adjoint-based total), dJdm_explicit, dJdm_implicit,
           dJdm_fd_total (or None), sigma, lam, adj_relres,
@@ -340,6 +360,8 @@ class Validate_shape_gradient(object):
         dJ_dm_explicit_fd = (J_plus_fix - J_minus_fix) / (2.0 * eps_m)
 
         # Operator FD for adjoint formula (assembly only -- no extra solves)
+        # TODO(AD): this is the stopgap FD-of-A/b flagged in the docstring
+        # above -- replace with analytic/AD dA_dm@sigma, db_dm.
         dA_dm = (Ap - Am) / (2.0 * eps_m)
         db_dm = (bp - bm) / (2.0 * eps_m)
 
