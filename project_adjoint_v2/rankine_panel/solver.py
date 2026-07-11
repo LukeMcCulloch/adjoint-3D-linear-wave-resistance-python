@@ -18,7 +18,7 @@ from .numba_kernels import _require_numba, assemble_A_b_vel_nb
 #from .numba_kernels import assemble_A_b_vel_nb
 from .slae import solve_simqit
 # ADJOINT
-from .objectives import SourceStrengthGradients, ShapeGradients
+from .objectives import SourceStrengthGradients
 from .gradient_validators import Validate_dj_dsigma
 '''
 not from rankine_panel.numba_kernels ... 

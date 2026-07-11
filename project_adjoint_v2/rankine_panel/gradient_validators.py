@@ -246,6 +246,139 @@ class Validate_shape_gradient(object):
     
     
     @staticmethod
+    def compute_beam_scale_gradient(
+        pf,
+        points0: np.ndarray,
+        Fr: float,
+        params,
+        panel_geometry_all,
+        assemble_A_b_vel_nb,
+        Objectives, # dependency injection (why do it this way vs import and call?)
+        Validate_dj_dsigma,
+        eps_m: float = 1e-5,
+        m0: float = 0.0,
+        z_cut: float = 0.0,
+        include_fd_total: bool = True) -> dict:
+        """
+        Production shape-gradient evaluation for one scalar parameter m
+        (beam scaling). Objective is J = -Fx.
+
+        dJ/dm = J_m|sigma (explicit) + lam^T (db/dm - (dA/dm) sigma) (implicit, adjoint)
+
+        Notes:
+          - dA/dm and db/dm are obtained by FD on the (cheap-relative-to-a-
+            linear-solve) assembly step only, at m0 +/- eps_m. This is NOT a
+            finite-difference of the full state solve: no extra linear solves
+            are needed for the implicit term (that's the whole point of the
+            adjoint -- lam is reused from a single adjoint solve at m0).
+          - Set include_fd_total=False to skip computing the FD "total"
+            derivative (which does require two extra state solves, purely
+            for cross-checking); an optimizer driving many gradient calls
+            doesn't need it.
+
+        Returns a dict with:
+          J0, dJdm (adjoint-based total), dJdm_explicit, dJdm_implicit,
+          dJdm_fd_total (or None), sigma, lam, adj_relres,
+          A, b, vel, vinf, center, coordsys, area
+        """
+
+        hull_verts = Validate_shape_gradient.hull_vertex_indices(pf.panels, pf.npanels)
+
+        # ---------------- baseline (geometry AT m0, not at m=0!) ----------------
+        points_m0 = Validate_shape_gradient.apply_beam_scale(points0, hull_verts, m0, z_cut=z_cut)
+        A, b, vel, vinf, center, coordsys, area = Validate_shape_gradient.assemble_from_points(
+            points_m0, pf, Fr, params, panel_geometry_all, assemble_A_b_vel_nb
+        )
+
+        # baseline sigma from A0 sigma = b0
+        lu, piv = lu_factor(A)
+        sigma = lu_solve((lu, piv), b)
+
+        vtotal = -vinf[None, :] + np.einsum("ijm,j->im", vel, sigma)
+        normals = coordsys[:, :, 2]
+
+        rho = float(params.rho_water)
+        gravity = float(params.gravity)
+
+        postprocess = Validate_dj_dsigma.make_postprocess_JnegFx(
+            vel, vinf, coordsys, area, center, pf.npanels, rho, gravity)
+
+        J0 = float(postprocess(sigma))
+
+        # SourceStrengthGradients = Objectives
+        dJ_dsigma = Objectives.compute_dJ_dsigma_JnegFx(
+            vel=vel, vtotal=vtotal, normals=normals,
+            area=area, center=center, npanels=pf.npanels, rho_water=rho)
+
+        lam = lu_solve((lu, piv), dJ_dsigma, trans=1)
+
+        adj_relres = np.linalg.norm(A.T @ lam - dJ_dsigma) / (np.linalg.norm(dJ_dsigma) + 1e-30)
+
+        # ---------------- plus ----------------
+        pts_p = Validate_shape_gradient.apply_beam_scale(points0, hull_verts, m0 + eps_m, z_cut=z_cut)
+
+        Ap, bp, velp, vinfp, centerp, coordsyp, areap = Validate_shape_gradient.assemble_from_points(
+            pts_p, pf, Fr, params, panel_geometry_all, assemble_A_b_vel_nb)
+
+        # ---------------- minus ----------------
+        pts_m = Validate_shape_gradient.apply_beam_scale(points0, hull_verts, m0 - eps_m, z_cut=z_cut)
+
+        Am, bm, velm, vinfm, centerm, coordsym, aream = Validate_shape_gradient.assemble_from_points(
+            pts_m, pf, Fr, params, panel_geometry_all, assemble_A_b_vel_nb)
+
+        # --- Explicit term: geometry changes, sigma held fixed (sigma0) ---
+        post_p = Validate_dj_dsigma.make_postprocess_JnegFx(
+            velp, vinfp, coordsyp, areap, centerp, pf.npanels, rho, gravity)
+
+        post_m = Validate_dj_dsigma.make_postprocess_JnegFx(
+            velm, vinfm, coordsym, aream, centerm, pf.npanels, rho, gravity)
+
+        J_plus_fix  = float(post_p(sigma))
+        J_minus_fix = float(post_m(sigma))
+
+        # FD gradient of the explicit (sigma fixed) term: J_m|sigma
+        dJ_dm_explicit_fd = (J_plus_fix - J_minus_fix) / (2.0 * eps_m)
+
+        # Operator FD for adjoint formula (assembly only -- no extra solves)
+        dA_dm = (Ap - Am) / (2.0 * eps_m)
+        db_dm = (bp - bm) / (2.0 * eps_m)
+
+        # --- Implicit (adjoint) term through sigma via the adjoint identity A,b ---
+        # i.e. this is (dJ/dsigma)(dsigma/dm)
+        dJ_dm_adj = float(lam @ (db_dm - dA_dm @ sigma))
+
+        # --- Total predicted gradient = explicit + implicit ---
+        dJ_dm_pred = dJ_dm_explicit_fd + dJ_dm_adj
+
+        dJ_dm_fd_total = None
+        if include_fd_total:
+            lup, pivp = lu_factor(Ap)
+            sigma_plus = lu_solve((lup, pivp), bp)
+            J_plus = float(Validate_dj_dsigma.make_postprocess_JnegFx(
+                velp, vinfp, coordsyp, areap, centerp, pf.npanels, rho, gravity
+            )(sigma_plus))
+
+            lum, pivm = lu_factor(Am)
+            sigma_minus = lu_solve((lum, pivm), bm)
+            J_minus = float(Validate_dj_dsigma.make_postprocess_JnegFx(
+                velm, vinfm, coordsym, aream, centerm, pf.npanels, rho, gravity
+            )(sigma_minus))
+
+            dJ_dm_fd_total = (J_plus - J_minus) / (2.0 * eps_m)
+
+        return dict(
+            J0=J0,
+            dJdm=dJ_dm_pred,
+            dJdm_explicit=dJ_dm_explicit_fd,
+            dJdm_implicit=dJ_dm_adj,
+            dJdm_fd_total=dJ_dm_fd_total,
+            sigma=sigma,
+            lam=lam,
+            adj_relres=adj_relres,
+            A=A, b=b, vel=vel, vinf=vinf, center=center, coordsys=coordsys, area=area,
+        )
+
+    @staticmethod
     def check_shape_grad_beam_scale(
         pf,
         points0: np.ndarray,
@@ -261,129 +394,32 @@ class Validate_shape_gradient(object):
         """
         Shape-gradient check for one parameter m (beam scaling).
         Objective is J = -Fx.
-    
+
         Compares:
           FD full: (J(m+e)-J(m-e))/(2e)
           Adjoint: lam^T (db/dm - (dA/dm) sigma)
-    
+
         Notes:
           - This uses FD for dA/dm and db/dm ONLY as a validation harness.
           - In production, you'll replace these with analytic derivatives.
         """
-        
-        hull_verts = Validate_shape_gradient.hull_vertex_indices(pf.panels, pf.npanels)
-    
-        # ---------------- baseline ----------------
-        A, b, vel, vinf, center, coordsys, area = Validate_shape_gradient.assemble_from_points(
-            points0, pf, Fr, params, panel_geometry_all, assemble_A_b_vel_nb
+        result = Validate_shape_gradient.compute_beam_scale_gradient(
+            pf, points0, Fr, params, panel_geometry_all, assemble_A_b_vel_nb,
+            Objectives, Validate_dj_dsigma,
+            eps_m=eps_m, m0=m0, z_cut=z_cut, include_fd_total=True,
         )
-    
-        # baseline sigma from A0 sigma = b0
-        lu, piv = lu_factor(A)
-        sigma = lu_solve((lu, piv), b)
-        
-    
-        vtotal = -vinf[None, :] + np.einsum("ijm,j->im", vel, sigma)
-        normals = coordsys[:, :, 2]
-    
-        rho = float(params.rho_water)
-        gravity = float(params.gravity)
-    
-        postprocess = Validate_dj_dsigma.make_postprocess_JnegFx(
-            vel, vinf, coordsys, area, center, pf.npanels, rho, gravity)
-        
-        J0 = float(postprocess(sigma))
-        
-        # SourceStrengthGradients = Objectives
-        dJ_dsigma = Objectives.compute_dJ_dsigma_JnegFx(
-            vel=vel, vtotal=vtotal, normals=normals,
-            area=area, center=center, npanels=pf.npanels, rho_water=rho)
-        
-        lam = lu_solve((lu, piv), dJ_dsigma, trans=1)
-    
-        adj_relres = np.linalg.norm(A.T @ lam - dJ_dsigma) / (np.linalg.norm(dJ_dsigma) + 1e-30)
-        print("\nAdjoint solve relres (J=-Fx):", adj_relres)
-        
-        
-        # ---------------- plus ----------------
-        pts_p = Validate_shape_gradient.apply_beam_scale(points0, hull_verts, m0 + eps_m, z_cut=z_cut)
-        
-        Ap, bp, velp, vinfp, centerp, coordsyp, areap = Validate_shape_gradient.assemble_from_points(
-            pts_p, pf, Fr, params, panel_geometry_all, assemble_A_b_vel_nb)
-        
-        lup, pivp = lu_factor(Ap)
-        sigma_plus = lu_solve((lup, pivp), bp)
-        
-        J_plus = float(Validate_dj_dsigma.make_postprocess_JnegFx(
-            velp, vinfp, coordsyp, areap, centerp, pf.npanels, rho, gravity
-        )(sigma_plus))
-        
-        
-        # ---------------- minus ----------------
-        pts_m = Validate_shape_gradient.apply_beam_scale(points0, hull_verts, m0 - eps_m, z_cut=z_cut)
-        
-        Am, bm, velm, vinfm, centerm, coordsym, aream = Validate_shape_gradient.assemble_from_points(
-            pts_m, pf, Fr, params, panel_geometry_all, assemble_A_b_vel_nb)
-        
-        lum, pivm = lu_factor(Am)
-        sigma_minus = lu_solve((lum, pivm), bm)
-        
-        J_minus = float(Validate_dj_dsigma.make_postprocess_JnegFx(
-            velm, vinfm, coordsym, aream, centerm, pf.npanels, rho, gravity
-        )(sigma_minus))
-        
-        
-        # --- Explicit term: geometry changes, sigma held fixed (sigma0) ---
-        post_p = Validate_dj_dsigma.make_postprocess_JnegFx(
-            velp, vinfp, coordsyp, areap, centerp, pf.npanels, rho, gravity)
-        
-        post_m = Validate_dj_dsigma.make_postprocess_JnegFx(
-            velm, vinfm, coordsym, aream, centerm, pf.npanels, rho, gravity)
 
-        J_plus_fix  = float(post_p(sigma))
-        J_minus_fix = float(post_m(sigma))
-        
-        
-    
-        # FD gradient of full objective dJ / dm
-        dJ_dm_fd = (J_plus - J_minus) / (2.0 * eps_m)
-        
-        
-        # FD gradients of implicit (dJ / d sigma)(d sigma / dm)
-        dJ_dm_explicit_fd = (J_plus_fix - J_minus_fix) / (2.0 * eps_m)
-        
-    
-        # Operator FD for adjoint formula
-        dA_dm = (Ap - Am) / (2.0 * eps_m)
-        db_dm = (bp - bm) / (2.0 * eps_m)
-        
-        
-        # --- Implicit (adjoint) term through sigma via the adjoint idenity A,b ---
-        # i.e. this is (dJ/dsigma)(dsigma/dm) from 
-        dJ_dm_adj = float(lam @ (db_dm - dA_dm @ sigma))
-        
-        
-        # --- Total predicted gradient = explicit + implicit ---
-        dJ_dm_pred = dJ_dm_explicit_fd + dJ_dm_adj
-    
-        # print("\nBeam scaling shape-gradient check (objective J=-Fx)")
-        # print("  m0 =", m0, " eps_m =", eps_m, " z_cut =", z_cut)
-        # print("  J0 =", J0)
-        # print("  FD dJ/dm      =", dJ_dm_fd)
-        # print("  adjoint dJ/dm =", dJ_dm_adj)
-        # print("  abs err       =", abs(dJ_dm_fd - dJ_dm_adj))
-        # print("  rel err       =", abs(dJ_dm_fd - dJ_dm_adj) / (abs(dJ_dm_fd) + 1e-30))
-        
-        
+        print("\nAdjoint solve relres (J=-Fx):", result["adj_relres"])
+
         print("\nBeam scaling shape-gradient check (objective J=-Fx)")
         print("  m0 =", m0, " eps_m =", eps_m, " z_cut =", z_cut)
-        print("  J0 =", J0)
-        print("  FD total dJ/dm      =", dJ_dm_fd)
-        print("  FD explicit (σ fixed)=", dJ_dm_explicit_fd)
-        print("  adjoint implicit     =", dJ_dm_adj)
-        print("  pred (explicit+adj)  =", dJ_dm_pred)
-        print("  abs err              =", abs(dJ_dm_fd - dJ_dm_pred))
-        print("  rel err              =", abs(dJ_dm_fd - dJ_dm_pred) / (abs(dJ_dm_fd) + 1e-30))
+        print("  J0 =", result["J0"])
+        print("  FD total dJ/dm      =", result["dJdm_fd_total"])
+        print("  FD explicit (sigma fixed)=", result["dJdm_explicit"])
+        print("  adjoint implicit     =", result["dJdm_implicit"])
+        print("  pred (explicit+adj)  =", result["dJdm"])
+        print("  abs err              =", abs(result["dJdm_fd_total"] - result["dJdm"]))
+        print("  rel err              =", abs(result["dJdm_fd_total"] - result["dJdm"]) / (abs(result["dJdm_fd_total"]) + 1e-30))
     
     
     ##########################

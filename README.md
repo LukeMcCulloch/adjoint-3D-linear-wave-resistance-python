@@ -856,7 +856,7 @@ $$
 
 ## 6. Two Common Lagrangian Conventions (Sign Confusion Resolved)
 
-### Convention A (most common in PDE-constrained optimization)
+### Sign Convention A (most common in PDE-constrained optimization)
 $$
 \mathcal{L}(m,\sigma,\lambda) = J(m,\sigma) + \lambda^T R(m,\sigma).
 $$
@@ -879,7 +879,7 @@ $$
 $$
 (because this $\lambda$ has the opposite sign relative to the earlier definition).
 
-### Convention B (matches the "adjoint trick" definition used above)
+### Sign Convention B (matches the "adjoint trick" definition used above)
 $$
 \mathcal{L}(m,\sigma,\lambda) = J(m,\sigma) - \lambda^T R(m,\sigma).
 $$
@@ -902,7 +902,7 @@ $$
 $$
 
 > **Bottom line:** both are correct. They differ only by the sign convention for $\lambda$.  
-> Pick one convention and stick to it.
+> Pick one convention and stick to it.  (In this solver, we use convention A)
 
 ---
 

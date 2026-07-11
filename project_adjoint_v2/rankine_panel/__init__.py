@@ -14,7 +14,7 @@ from .report import append_output_dat
 
 
 from .numba_kernels import assemble_A_b_vel_nb
-from .objectives import SourceStrengthGradients, ShapeGradients
+from .objectives import SourceStrengthGradients
 from .gradient_validators import Validate_dj_dsigma, Validate_shape_gradient
 #from .gradient_validators import Objectives          # wherever you put compute_dJ_dsigma_JnegFx
 #from .validate_dj_dsigma import Validate_dj_dsigma
