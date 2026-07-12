@@ -56,15 +56,17 @@ def hs_influence_revad(fieldpoint, center, coordsys, corners_local, eps=1e-6):
     corners_local: 2x4 nested list of Node
     returns: [vx, vy, vz] as Node
     """
+    # (fieldpoint - center) in the original influence.py:
     dx0 = fieldpoint[0] - center[0]
     dy0 = fieldpoint[1] - center[1]
     dz0 = fieldpoint[2] - center[2]
-
+    
+    # coordsys.T @ (fieldpoint - center) in the original influence.py:
     x = coordsys[0][0]*dx0 + coordsys[1][0]*dy0 + coordsys[2][0]*dz0
     y = coordsys[0][1]*dx0 + coordsys[1][1]*dy0 + coordsys[2][1]*dz0
     z = coordsys[0][2]*dx0 + coordsys[1][2]*dy0 + coordsys[2][2]*dz0
 
-    # node objects:
+    # node objects to be composed out of the incoming more primitive node-object-geometry (non-iteratively):
     dphi0 = Node(0.0, [])
     dphi1 = Node(0.0, [])
     dphi2 = Node(0.0, [])
@@ -76,6 +78,7 @@ def hs_influence_revad(fieldpoint, center, coordsys, corners_local, eps=1e-6):
         xk, yk = corners_local[0][k], corners_local[1][k]
         xk2, yk2 = corners_local[0][k2], corners_local[1][k2]
 
+        # dx adn dy in the original influence.py
         edx = xk2 - xk
         edy = yk2 - yk
         d = _sqrt(edx*edx + edy*edy)
@@ -92,10 +95,12 @@ def hs_influence_revad(fieldpoint, center, coordsys, corners_local, eps=1e-6):
             continue
 
         L = _log(num / den)
-
+        
+        # 
         dphi0 = dphi0 + (edy / d) * L
         dphi1 = dphi1 - (edx / d) * L
-
+        
+        # physics of this:  
         if abs(edx.val) < 1e-30:
             m = Node(float(np.sign(edy.val) * 1e30), [])
         else:
@@ -145,7 +150,7 @@ def unpack_nodes(xs):
 
 
 def run_traced(xs_nodes):
-    fieldpoint, center, coordsys, corners_local = unpack_nodes(xs_nodes)
+    fieldpoint, center, coordsys, corners_local = unpack_nodes(xs_nodes)  # already node valued objects by the time they get here through jacobian
     return hs_influence_revad(fieldpoint, center, coordsys, corners_local)
 
 

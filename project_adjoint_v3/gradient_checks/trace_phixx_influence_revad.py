@@ -61,6 +61,7 @@ def phixx_influence_revad(fieldpoint, center, coordsys, corners_local, eps=1e-6)
     y = coordsys[0][1]*dx0 + coordsys[1][1]*dy0 + coordsys[2][1]*dz0
     z = coordsys[0][2]*dx0 + coordsys[1][2]*dy0 + coordsys[2][2]*dz0
 
+    # node objects to be composed out of the incoming primatives:
     zero = Node(0.0, [])
     dd = [[zero, zero, zero], [zero, zero, zero], [zero, zero, zero]]
 
@@ -136,8 +137,8 @@ def unpack_nodes(xs):
 
 
 def run_traced(xs_nodes):
-    fieldpoint, center, coordsys, corners_local = unpack_nodes(xs_nodes)
-    out = phixx_influence_revad(fieldpoint, center, coordsys, corners_local)
+    fieldpoint, center, coordsys, corners_local = unpack_nodes(xs_nodes) # already node valued objects by the time they get here through jacobian
+    out = phixx_influence_revad(fieldpoint, center, coordsys, corners_local) #push node valued objects into phixx influence revad
     return [out[a][b] for a in range(3) for b in range(3)]  # flatten row-major, 9 entries
 
 
@@ -157,6 +158,7 @@ if __name__ == "__main__":
     H0 = phixx_influence_primal(fieldpoint, center, coordsys, corners_local)
     print("primal value (3x3):\n", H0)
 
+    # turn x0 into nodes and push them into run_traced -> which packs them back into geometry pieces (fieldpoints, centers, etc.) , and then it will run phixx_influence_revad on these node valued geometric objects.
     J_revad = jacobian(run_traced, x0)  # (9, 23)
 
     eps = 1e-6
