@@ -33,10 +33,9 @@ import numpy as np
 from rankine_panel.revad import jacobian
 
 from rankine_panel.io import read_panel_file
-from rankine_panel.geometry import panel_geometry_all
+from rankine_panel.geometry import panel_geometry_all, panel_geometry_one
 from rankine_panel.influence import phixx_influence
 
-from trace_panel_geometry_revad import panel_geometry_revad
 
 
 # =============================================================================
@@ -48,8 +47,8 @@ def combined_phixx_revad(row_corners, col_corners):
     row_corners, col_corners: each [c0,c1,c2,c3], length-3 Node lists
     returns: 3x3 nested list of Node (global Hessian)
     """
-    center_row, _coordsys_row, _cornerslocal_row, _area_row = panel_geometry_revad(row_corners)
-    center_col, coordsys_col, cornerslocal_col, _area_col = panel_geometry_revad(col_corners)
+    center_row, _coordsys_row, _cornerslocal_row, _area_row = panel_geometry_one(row_corners)
+    center_col, coordsys_col, cornerslocal_col, _area_col = panel_geometry_one(col_corners)
 
     fieldpoint = center_row
     H = phixx_influence(fieldpoint, center_col, coordsys_col, cornerslocal_col)

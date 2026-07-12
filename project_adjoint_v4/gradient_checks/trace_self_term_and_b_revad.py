@@ -53,9 +53,9 @@ import numpy as np
 from rankine_panel.revad import jacobian
 
 from rankine_panel.io import read_panel_file
-from rankine_panel.geometry import panel_geometry_all
+from rankine_panel.geometry import panel_geometry_all, panel_geometry_one
 
-from trace_panel_geometry_revad import panel_geometry_revad, _dot
+from trace_panel_geometry_revad import _dot
 
 
 # =============================================================================
@@ -63,7 +63,7 @@ from trace_panel_geometry_revad import panel_geometry_revad, _dot
 # =============================================================================
 
 def self_term_A_revad(row_corners):
-    _center_row, coordsys_row, _cornerslocal_row, _area_row = panel_geometry_revad(row_corners)
+    _center_row, coordsys_row, _cornerslocal_row, _area_row = panel_geometry_one(row_corners)
     normal_row = [coordsys_row[r][2] for r in range(3)]
     return _dot(normal_row, normal_row) * (-0.5)
 
@@ -73,7 +73,7 @@ def self_term_A_revad(row_corners):
 # =============================================================================
 
 def b_row_revad(row_corners, vinf_x):
-    _center_row, coordsys_row, _cornerslocal_row, _area_row = panel_geometry_revad(row_corners)
+    _center_row, coordsys_row, _cornerslocal_row, _area_row = panel_geometry_one(row_corners)
     normal_row_x = coordsys_row[0][2]
     return normal_row_x * vinf_x
 

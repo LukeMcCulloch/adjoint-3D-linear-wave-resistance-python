@@ -2,26 +2,28 @@
 """
 Computes:
     d(panel geometry) / d(vertices)
-    
-This is an Oracle:
-    pure Python, builds a full object graph, does dynamic dispatch through operator overloading
 
-Reverse-mode AD oracle for panel_geometry_all, traced through revad.py's
-Node graph -- same treatment as trace_hs_influence_revad.py /
-trace_phixx_influence_revad.py.
+Validates rankine_panel.geometry.panel_geometry_all's reverse-mode gradient
+directly -- same consolidation as trace_hs_influence_revad.py /
+trace_phixx_influence_revad.py, see those files for the "one generic
+function, no separate oracle copy" mechanism. One difference worth noting:
+panel_geometry_all is vectorized over ALL N panels and sits on the live
+production forward-solve path, so its dispatch is at the top of the
+function (untouched float64 branch vs. a dtype=object/np.vectorize(sqrt)
+branch) rather than per-operation -- see its docstring in geometry.py.
 
-This is the missing link between the two kernel oracles (which differentiate
-w.r.t. panel geometry: center/coordsys/corners_local) and what we actually
-want eventually: derivatives w.r.t. raw VERTEX positions. panel_geometry_all
-(rankine_panel/geometry.py) is exactly that link -- 4 corner vertices in,
-center/coordsys/cornerslocal/area out, via midpoints, a sqrt-normalized
-tangent vector, two cross products, and centroid-moment corrections.
+panel_geometry_one (also in geometry.py) is a thin convenience wrapper: it
+builds the minimal 4-vertex/1-panel arrays panel_geometry_all expects and
+squeezes the result back to per-panel shape, so this trace script (which
+only ever needs one or two panels at a time) doesn't have to construct a
+full N-panel mesh. It is NOT a second implementation of the formula --
+panel_geometry_all is still the only place the math is written.
 
-Traces ONE panel at a time (the production function is vectorized over N
-panels; here we differentiate a single panel's 4 corners w.r.t. its own
-geometry outputs -- 12 scalar inputs, 21 scalar outputs, 21 backward passes).
-Cross-checked against central-FD on the real production panel_geometry_all,
-perturbing one real panel's actual vertex coordinates from fifi.dat.
+Traces ONE panel at a time -- 12 scalar inputs (4 corners x xyz), 21 scalar
+outputs (center 3 + coordsys 9 + cornerslocal 8 + area 1), 21 backward
+passes. Cross-checked against central-FD on the real production
+panel_geometry_all, perturbing one real panel's actual vertex coordinates
+from fifi.dat.
 
 Branch caveat (same as the kernel oracles): the area>1e-10 guard is only
 exercised on its "normal" (non-degenerate) side here, since we're tracing
@@ -36,97 +38,19 @@ if _PROJECT_ROOT not in sys.path:
     sys.path.insert(0, _PROJECT_ROOT)
 
 import numpy as np
-from rankine_panel.revad import Node, sqrt as _sqrt, jacobian
+from rankine_panel.revad import jacobian
 
 from rankine_panel.io import read_panel_file
-from rankine_panel.geometry import panel_geometry_all
+from rankine_panel.geometry import panel_geometry_all, panel_geometry_one
 
 
 # =============================================================================
-# small Node-vector helpers
+# small Node-vector helper -- generic (works for float or Node), still used
+# by trace_full_chain_A_entry_revad.py for the dot-with-normal step
 # =============================================================================
-
-def _cross(a, b):
-    return [a[1]*b[2] - a[2]*b[1], a[2]*b[0] - a[0]*b[2], a[0]*b[1] - a[1]*b[0]]
-
 
 def _dot(a, b):
     return a[0]*b[0] + a[1]*b[1] + a[2]*b[2]
-
-
-def _norm(a):
-    return _sqrt(_dot(a, a))
-
-
-# =============================================================================
-# Node-traced port of panel_geometry_all for a SINGLE panel.
-# Line-by-line structural match to the vectorized primal in geometry.py.
-# =============================================================================
-
-def panel_geometry_revad(corners):
-    """
-    corners: [c0, c1, c2, c3], each a length-3 list of Node (one panel's 4 vertices)
-    returns: center(3 Node), coordsys (3x3 nested list, cols t1,t2,n),
-             cornerslocal (2x4 nested list), area (Node)
-    """
-    c0, c1, c2, c3 = corners
-
-    m1 = [(c0[i] + c1[i]) * 0.5 for i in range(3)]
-    m2 = [(c1[i] + c2[i]) * 0.5 for i in range(3)]
-    m3 = [(c2[i] + c3[i]) * 0.5 for i in range(3)]
-    m4 = [(c3[i] + c0[i]) * 0.5 for i in range(3)]
-
-    iv_raw = [m2[i] - m4[i] for i in range(3)]
-    iv_norm = _norm(iv_raw)
-    iv = [iv_raw[i] / iv_norm for i in range(3)]
-
-    jvbar = [m3[i] - m1[i] for i in range(3)]
-
-    nv_raw = _cross(iv, jvbar)
-    nv_norm = _norm(nv_raw)
-    nv = [nv_raw[i] / nv_norm for i in range(3)]
-
-    jv = _cross(nv, iv)
-
-    # coordsys[row][col], columns are (iv, jv, nv)
-    coordsys = [[iv[r], jv[r], nv[r]] for r in range(3)]
-
-    center0 = [(m1[i] + m2[i] + m3[i] + m4[i]) * 0.25 for i in range(3)]
-
-    corners_list = [c0, c1, c2, c3]
-    d = [[corners_list[k][i] - center0[i] for i in range(3)] for k in range(4)]
-
-    xi = [_dot(d[k], iv) for k in range(4)]
-    eta = [_dot(d[k], jv) for k in range(4)]
-
-    ip1 = (1, 2, 3, 0)
-    xi_next = [xi[ip1[k]] for k in range(4)]
-    eta_next = [eta[ip1[k]] for k in range(4)]
-    dxi = [xi_next[k] - xi[k] for k in range(4)]
-    deta = [eta_next[k] - eta[k] for k in range(4)]
-
-    area = Node(0.0, [])
-    for k in range(4):
-        area = area + deta[k] * (xi_next[k] + xi[k])
-    area = area * 0.5
-
-    momentxi = Node(0.0, [])
-    momenteta = Node(0.0, [])
-    for k in range(4):
-        momentxi = momentxi + dxi[k] * (eta_next[k]*eta_next[k] + eta[k]*eta_next[k] + eta[k]*eta[k])
-        momenteta = momenteta + deta[k] * (xi_next[k]*xi_next[k] + xi[k]*xi_next[k] + xi[k]*xi[k])
-    momentxi = momentxi * (-1.0 / 6.0)
-    momenteta = momenteta * (1.0 / 6.0)
-
-    # real panels: area > 1e-10 always holds; not tracing the degenerate branch here (parked)
-    xic = momenteta / area
-    etac = momentxi / area
-
-    cornerslocal = [[xi[k] - xic for k in range(4)], [eta[k] - etac for k in range(4)]]
-
-    center = [center0[i] + iv[i]*xic + jv[i]*etac for i in range(3)]
-
-    return center, coordsys, cornerslocal, area
 
 
 # =============================================================================
@@ -144,7 +68,7 @@ def unpack_nodes(xs):
 
 def run_traced(xs_nodes):
     corners = unpack_nodes(xs_nodes)
-    center, coordsys, cornerslocal, area = panel_geometry_revad(corners)
+    center, coordsys, cornerslocal, area = panel_geometry_one(corners)
     out = list(center)
     out += [coordsys[r][c] for r in range(3) for c in range(3)]
     out += [cornerslocal[a][b] for a in range(2) for b in range(4)]
@@ -220,9 +144,11 @@ if __name__ == "__main__":
     print(f"max relative error (entries with |value|>1e-8): {max_rel_err:.3e}")
     print(f"  worst-rel entry: d{worst_rel[1]}/d{worst_rel[0]}  revad={worst_rel[2]:.8e}  "
           f"fd={worst_rel[3]:.8e}  rel={worst_rel[4]:.3e}")
-    
-    
-    
-    # real FD truncation error should shrink roughly as eps**2 as eps shrinks (down to where cancellation error start to dominate and reverse the trend)
-    # indeed in testing we see as eps drops by 1 order of mag, eps error measures drop by 2 orders of magnitude.
-    #
+
+    # Real FD truncation error should shrink roughly as eps**2 as eps shrinks
+    # (down to where cancellation error starts to dominate and reverses the
+    # trend) -- confirmed earlier in this project's history: as eps drops by
+    # one order of magnitude, the error above drops by two, down to ~1e-6,
+    # then grows again from floating-point roundoff. That behavior is the
+    # signature of a CORRECT analytic reference being compared to an
+    # imperfect FD estimate, not a bug in this trace.

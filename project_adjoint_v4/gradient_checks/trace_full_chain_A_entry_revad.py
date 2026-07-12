@@ -63,10 +63,10 @@ import numpy as np
 from rankine_panel.revad import jacobian
 
 from rankine_panel.io import read_panel_file
-from rankine_panel.geometry import panel_geometry_all
+from rankine_panel.geometry import panel_geometry_all, panel_geometry_one
 from rankine_panel.influence import hs_influence
 
-from trace_panel_geometry_revad import panel_geometry_revad, _dot
+from trace_panel_geometry_revad import _dot
 
 
 # =============================================================================
@@ -82,8 +82,8 @@ def A_entry_revad(row_corners, col_corners):
     center. See module docstring for the FS-row variant, and for why row
     and col vertices enter through different mechanisms.
     """
-    center_row, coordsys_row, _cornerslocal_row, _area_row = panel_geometry_revad(row_corners)
-    center_col, coordsys_col, cornerslocal_col, _area_col = panel_geometry_revad(col_corners)
+    center_row, coordsys_row, _cornerslocal_row, _area_row = panel_geometry_one(row_corners)
+    center_col, coordsys_col, cornerslocal_col, _area_col = panel_geometry_one(col_corners)
 
     normal_row = [coordsys_row[r][2] for r in range(3)]  # 3rd column = nv
 
