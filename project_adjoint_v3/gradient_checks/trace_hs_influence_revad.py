@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
 """
+This is an Oracle:
+    pure Python, builds a full object graph, does dynamic dispatch through operator overloading
+    
 Reverse-mode AD oracle for hs_influence, traced through revad.py's Node graph
-(operator-overload tracing -- NOT AST/source transformation, see discussion).
+(operator-overload tracing -- NOT AST/source transformation).
 
 This is a correctness oracle, not a performance path: it exists to derive and
 validate the full sensitivity of hs_influence's output velocity (3,) to every
@@ -29,7 +32,7 @@ for p in (_PROJECT_ROOT, _AD_REPO_SRC):
         sys.path.insert(0, p)
 
 import numpy as np
-from revad import Node, atan, sqrt as _sqrt, log as _log, jacobian
+from revad import Node, atan, sqrt as _sqrt, log as _log, jacobian # getting from _AD_REPO_SRC nearby but not in this repo! #todo: bring revad over so we don't have weird dependencies
 
 from rankine_panel.io import read_panel_file
 from rankine_panel.geometry import panel_geometry_all
@@ -58,6 +61,7 @@ def hs_influence_revad(fieldpoint, center, coordsys, corners_local, eps=1e-6):
     y = coordsys[0][1]*dx0 + coordsys[1][1]*dy0 + coordsys[2][1]*dz0
     z = coordsys[0][2]*dx0 + coordsys[1][2]*dy0 + coordsys[2][2]*dz0
 
+    # node objects:
     dphi0 = Node(0.0, [])
     dphi1 = Node(0.0, [])
     dphi2 = Node(0.0, [])
