@@ -48,22 +48,17 @@ import sys
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.abspath(os.path.join(_THIS_DIR, ".."))
-_AD_REPO_SRC = r"C:\tlm\projects\automatic-differentiation-schemes-in-python\src"
-for p in (_PROJECT_ROOT, _AD_REPO_SRC):
-    if p not in sys.path:
-        sys.path.insert(0, p)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 import numpy as np
-from revad import Node, jacobian  # from _AD_REPO_SRC, see trace_hs_influence_revad.py TODO
+from rankine_panel.revad import Node, jacobian
 
 from rankine_panel.io import read_panel_file
 from rankine_panel.geometry import panel_geometry_all
-from rankine_panel.influence import hs_influence as hs_influence_primal
-from rankine_panel.numba_kernels import phixx_influence_nb as phixx_influence_primal  # production formula, see trace_phixx_influence_revad.py note on the influence.py duplication discrepancy
+from rankine_panel.influence import hs_influence, phixx_influence
 
 from trace_panel_geometry_revad import panel_geometry_revad
-from trace_hs_influence_revad import hs_influence_revad
-from trace_phixx_influence_revad import phixx_influence_revad
 
 
 # =============================================================================
@@ -92,12 +87,12 @@ def A_entry_fs_row_revad(row_corners, col_corners, deltax, U2, gravity):
     fieldpoint = [p0, p1, p2]
     fieldpoint_mirror = [pp0, pp1, pp2]
 
-    v = hs_influence_revad(fieldpoint, center_col, coordsys_col, cornerslocal_col)
-    vp = hs_influence_revad(fieldpoint_mirror, center_col, coordsys_col, cornerslocal_col)
+    v = hs_influence(fieldpoint, center_col, coordsys_col, cornerslocal_col)
+    vp = hs_influence(fieldpoint_mirror, center_col, coordsys_col, cornerslocal_col)
     v2 = v[2] + vp[2]
 
-    H = phixx_influence_revad(fieldpoint, center_col, coordsys_col, cornerslocal_col)
-    Hp = phixx_influence_revad(fieldpoint_mirror, center_col, coordsys_col, cornerslocal_col)
+    H = phixx_influence(fieldpoint, center_col, coordsys_col, cornerslocal_col)
+    Hp = phixx_influence(fieldpoint_mirror, center_col, coordsys_col, cornerslocal_col)
     phi_xx = H[0][0] + Hp[0][0]
 
     return phi_xx * U2 + v2 * gravity
@@ -137,12 +132,12 @@ def A_entry_fs_row_primal(points, panels, row, col, deltax, U2, gravity):
     p = np.array([geom.center[0, row] + deltax, geom.center[1, row], 0.0])
     pp = np.array([p[0], -p[1], 0.0])
 
-    v = hs_influence_primal(p, geom.center[:, col], geom.coordsys[:, :, col], geom.cornerslocal[:, :, col])
-    vp = hs_influence_primal(pp, geom.center[:, col], geom.coordsys[:, :, col], geom.cornerslocal[:, :, col])
+    v = hs_influence(p, geom.center[:, col], geom.coordsys[:, :, col], geom.cornerslocal[:, :, col])
+    vp = hs_influence(pp, geom.center[:, col], geom.coordsys[:, :, col], geom.cornerslocal[:, :, col])
     v2 = v[2] + vp[2]
 
-    H = phixx_influence_primal(p, geom.center[:, col], geom.coordsys[:, :, col], geom.cornerslocal[:, :, col])
-    Hp = phixx_influence_primal(pp, geom.center[:, col], geom.coordsys[:, :, col], geom.cornerslocal[:, :, col])
+    H = phixx_influence(p, geom.center[:, col], geom.coordsys[:, :, col], geom.cornerslocal[:, :, col])
+    Hp = phixx_influence(pp, geom.center[:, col], geom.coordsys[:, :, col], geom.cornerslocal[:, :, col])
     phi_xx = H[0, 0] + Hp[0, 0]
 
     return float(U2 * phi_xx + gravity * v2)

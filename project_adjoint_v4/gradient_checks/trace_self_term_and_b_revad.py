@@ -46,13 +46,11 @@ import sys
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.abspath(os.path.join(_THIS_DIR, ".."))
-_AD_REPO_SRC = r"C:\tlm\projects\automatic-differentiation-schemes-in-python\src"
-for p in (_PROJECT_ROOT, _AD_REPO_SRC):
-    if p not in sys.path:
-        sys.path.insert(0, p)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 import numpy as np
-from revad import jacobian  # from _AD_REPO_SRC, see trace_hs_influence_revad.py TODO
+from rankine_panel.revad import jacobian
 
 from rankine_panel.io import read_panel_file
 from rankine_panel.geometry import panel_geometry_all

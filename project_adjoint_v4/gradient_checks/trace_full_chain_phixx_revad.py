@@ -9,10 +9,14 @@ This is an Oracle:
 Combined reverse-mode AD oracle: raw vertex positions -> panel_geometry_all
 -> phixx_influence, in ONE Node graph. Same treatment as
 trace_full_chain_revad.py (see that file for the fuller explanation of how
-composition works), just with phixx_influence_revad in place of
-hs_influence_revad -- this is the piece needed for the free-surface rows of
-A (A[row,col] = U2*phi_xx + gravity*v2 there), where phi_xx comes from the
-Hessian kernel rather than the velocity kernel.
+composition works), just with phixx_influence in place of hs_influence --
+this is the piece needed for the free-surface rows of A (A[row,col] =
+U2*phi_xx + gravity*v2 there), where phi_xx comes from the Hessian kernel
+rather than the velocity kernel.
+
+phixx_influence is now the single generic function (see influence.py) used
+for both this AD trace and the FD reference below -- no separate primal
+import needed.
 
 Output is the 3x3 global Hessian (9 scalars), so this needs 9 backward
 passes instead of hs_influence's 3, still independent of the 24 inputs.
@@ -22,20 +26,17 @@ import sys
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.abspath(os.path.join(_THIS_DIR, ".."))
-_AD_REPO_SRC = r"C:\tlm\projects\automatic-differentiation-schemes-in-python\src"
-for p in (_PROJECT_ROOT, _AD_REPO_SRC):
-    if p not in sys.path:
-        sys.path.insert(0, p)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 import numpy as np
-from revad import jacobian  # from _AD_REPO_SRC, see trace_hs_influence_revad.py TODO
+from rankine_panel.revad import jacobian
 
 from rankine_panel.io import read_panel_file
 from rankine_panel.geometry import panel_geometry_all
-from rankine_panel.numba_kernels import phixx_influence_nb as phixx_influence_primal
+from rankine_panel.influence import phixx_influence
 
 from trace_panel_geometry_revad import panel_geometry_revad
-from trace_phixx_influence_revad import phixx_influence_revad
 
 
 # =============================================================================
@@ -51,7 +52,7 @@ def combined_phixx_revad(row_corners, col_corners):
     center_col, coordsys_col, cornerslocal_col, _area_col = panel_geometry_revad(col_corners)
 
     fieldpoint = center_row
-    H = phixx_influence_revad(fieldpoint, center_col, coordsys_col, cornerslocal_col)
+    H = phixx_influence(fieldpoint, center_col, coordsys_col, cornerslocal_col)
     return H
 
 
@@ -90,7 +91,7 @@ if __name__ == "__main__":
     print(f"Tracing full chain (vertices -> geometry -> Hessian) for row panel {ROW}, col panel {COL}")
 
     geom0 = panel_geometry_all(pf.points, pf.panels)
-    H0 = phixx_influence_primal(geom0.center[:, ROW], geom0.center[:, COL],
+    H0 = phixx_influence(geom0.center[:, ROW], geom0.center[:, COL],
                                  geom0.coordsys[:, :, COL], geom0.cornerslocal[:, :, COL])
     print("primal Hessian (3x3):\n", H0)
 
@@ -113,9 +114,9 @@ if __name__ == "__main__":
         gp = panel_geometry_all(points_p, pf.panels)
         gm = panel_geometry_all(points_m, pf.panels)
 
-        Hp = phixx_influence_primal(gp.center[:, ROW], gp.center[:, COL],
+        Hp = phixx_influence(gp.center[:, ROW], gp.center[:, COL],
                                      gp.coordsys[:, :, COL], gp.cornerslocal[:, :, COL]).ravel()
-        Hm = phixx_influence_primal(gm.center[:, ROW], gm.center[:, COL],
+        Hm = phixx_influence(gm.center[:, ROW], gm.center[:, COL],
                                      gm.coordsys[:, :, COL], gm.cornerslocal[:, :, COL]).ravel()
         J_fd[:, i] = (Hp - Hm) / (2.0 * eps)
 

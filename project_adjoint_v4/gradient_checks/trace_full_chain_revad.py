@@ -39,20 +39,17 @@ import sys
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.abspath(os.path.join(_THIS_DIR, ".."))
-_AD_REPO_SRC = r"C:\tlm\projects\automatic-differentiation-schemes-in-python\src"
-for p in (_PROJECT_ROOT, _AD_REPO_SRC):
-    if p not in sys.path:
-        sys.path.insert(0, p)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 import numpy as np
-from revad import jacobian  # from _AD_REPO_SRC, see trace_hs_influence_revad.py TODO
+from rankine_panel.revad import jacobian
 
 from rankine_panel.io import read_panel_file
 from rankine_panel.geometry import panel_geometry_all
-from rankine_panel.influence import hs_influence as hs_influence_primal
+from rankine_panel.influence import hs_influence
 
 from trace_panel_geometry_revad import panel_geometry_revad
-from trace_hs_influence_revad import hs_influence_revad
 
 
 # =============================================================================
@@ -63,15 +60,15 @@ def combined_revad(row_corners, col_corners):
     """
     row_corners, col_corners: each [c0,c1,c2,c3], length-3 Node lists (one panel's 4 vertices)
     returns: [vx, vy, vz] as Node
-    
+
     this is the composition
     """
     center_row, _coordsys_row, _cornerslocal_row, _area_row = panel_geometry_revad(row_corners)
     center_col, coordsys_col, cornerslocal_col, _area_col = panel_geometry_revad(col_corners)
 
     fieldpoint = center_row
-    vel = hs_influence_revad(fieldpoint, center_col, coordsys_col, cornerslocal_col)
-    return vel
+    vel = hs_influence(fieldpoint, center_col, coordsys_col, cornerslocal_col)
+    return list(vel)
 
 
 # =============================================================================
@@ -108,7 +105,7 @@ if __name__ == "__main__":
     print(f"Tracing full chain (vertices -> geometry -> velocity) for row panel {ROW}, col panel {COL}")
 
     geom0 = panel_geometry_all(pf.points, pf.panels)
-    v0 = hs_influence_primal(geom0.center[:, ROW], geom0.center[:, COL],
+    v0 = hs_influence(geom0.center[:, ROW], geom0.center[:, COL],
                               geom0.coordsys[:, :, COL], geom0.cornerslocal[:, :, COL])
     print("primal velocity:", v0)
 
@@ -131,9 +128,9 @@ if __name__ == "__main__":
         gp = panel_geometry_all(points_p, pf.panels)
         gm = panel_geometry_all(points_m, pf.panels)
 
-        vp = hs_influence_primal(gp.center[:, ROW], gp.center[:, COL],
+        vp = hs_influence(gp.center[:, ROW], gp.center[:, COL],
                                   gp.coordsys[:, :, COL], gp.cornerslocal[:, :, COL])
-        vm = hs_influence_primal(gm.center[:, ROW], gm.center[:, COL],
+        vm = hs_influence(gm.center[:, ROW], gm.center[:, COL],
                                   gm.coordsys[:, :, COL], gm.cornerslocal[:, :, COL])
         J_fd[:, i] = (vp - vm) / (2.0 * eps)
 

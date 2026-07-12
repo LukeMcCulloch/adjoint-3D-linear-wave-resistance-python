@@ -56,20 +56,17 @@ import sys
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.abspath(os.path.join(_THIS_DIR, ".."))
-_AD_REPO_SRC = r"C:\tlm\projects\automatic-differentiation-schemes-in-python\src"
-for p in (_PROJECT_ROOT, _AD_REPO_SRC):
-    if p not in sys.path:
-        sys.path.insert(0, p)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 import numpy as np
-from revad import jacobian  # from _AD_REPO_SRC, see trace_hs_influence_revad.py TODO
+from rankine_panel.revad import jacobian
 
 from rankine_panel.io import read_panel_file
 from rankine_panel.geometry import panel_geometry_all
-from rankine_panel.influence import hs_influence as hs_influence_primal
+from rankine_panel.influence import hs_influence
 
 from trace_panel_geometry_revad import panel_geometry_revad, _dot
-from trace_hs_influence_revad import hs_influence_revad
 
 
 # =============================================================================
@@ -93,8 +90,8 @@ def A_entry_revad(row_corners, col_corners):
     fieldpoint = center_row
     fieldpoint_mirror = [center_row[0], center_row[1] * (-1.0), center_row[2]]  # y-flip only
 
-    v = hs_influence_revad(fieldpoint, center_col, coordsys_col, cornerslocal_col)
-    vp = hs_influence_revad(fieldpoint_mirror, center_col, coordsys_col, cornerslocal_col)
+    v = hs_influence(fieldpoint, center_col, coordsys_col, cornerslocal_col)
+    vp = hs_influence(fieldpoint_mirror, center_col, coordsys_col, cornerslocal_col)
 
     v_combined = [v[0] + vp[0], v[1] - vp[1], v[2] + vp[2]]  # even,odd,even in y
 
@@ -133,8 +130,8 @@ def A_entry_primal(points, panels, row, col):
     pp = p.copy(); pp[1] *= -1.0
     n_row = geom.coordsys[:, 2, row]
 
-    v = hs_influence_primal(p, geom.center[:, col], geom.coordsys[:, :, col], geom.cornerslocal[:, :, col])
-    vp = hs_influence_primal(pp, geom.center[:, col], geom.coordsys[:, :, col], geom.cornerslocal[:, :, col])
+    v = hs_influence(p, geom.center[:, col], geom.coordsys[:, :, col], geom.cornerslocal[:, :, col])
+    vp = hs_influence(pp, geom.center[:, col], geom.coordsys[:, :, col], geom.cornerslocal[:, :, col])
     v_combined = np.array([v[0] + vp[0], v[1] - vp[1], v[2] + vp[2]])
     return float(np.dot(n_row, v_combined))
 

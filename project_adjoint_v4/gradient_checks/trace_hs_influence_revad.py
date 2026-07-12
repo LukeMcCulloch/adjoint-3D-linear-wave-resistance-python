@@ -1,135 +1,43 @@
 # -*- coding: utf-8 -*-
 """
-Computes: 
+Computes:
     d(velocity) / d(panel geometry)
-    
-This is an Oracle:
-    pure Python, builds a full object graph, does dynamic dispatch through operator overloading
-    
-Reverse-mode AD oracle for hs_influence, traced through revad.py's Node graph
-(operator-overload tracing -- NOT AST/source transformation).
 
-This is a correctness oracle, not a performance path: it exists to derive and
-validate the full sensitivity of hs_influence's output velocity (3,) to every
-scalar input (fieldpoint(3), center(3), coordsys(3,3), corners_local(2,4) --
-23 scalars total), computed in ONE reverse-mode Jacobian pass (3 backward
-passes, one per output component -- cost independent of the 23 inputs, which
-is the whole point of reverse mode).
+Validates rankine_panel.influence.hs_influence's reverse-mode gradient
+directly -- there is no separate "oracle" function anymore. hs_influence
+itself is now GENERIC (see its docstring in influence.py): called with
+plain float64 arrays it behaves exactly as before (verified: 0.0 diff vs.
+the pre-refactor version); called with arrays of revad.Node it builds a
+full reverse-mode graph via operator-overload tracing (NOT AST/source
+transformation) and gets differentiated by revad.jacobian(). Both the FD
+reference below and the AD trace call the SAME function -- one source of
+truth, no hand-duplicated kernel copy to drift out of sync.
 
-Cross-checked against central-FD directly on the existing trusted plain-
-Python rankine_panel.influence.hs_influence, using REAL panel geometry from
-fifi.dat (not synthetic data) -- because hs_influence has data-dependent
-branches (degenerate-edge guards), a trace only captures whichever branch the
-specific inputs given to it took. Real, representative panel pairs exercise
-the normal (non-degenerate) path, which is what the production assembly hits
-overwhelmingly; that's the branch coverage this oracle validates.
+Validates the full sensitivity of hs_influence's output velocity (3,) to
+every scalar input (fieldpoint(3), center(3), coordsys(3,3),
+corners_local(2,4) -- 23 scalars total), computed in ONE reverse-mode
+Jacobian pass (3 backward passes, one per output component -- cost
+independent of the 23 inputs, the whole point of reverse mode).
+
+Branch-coverage caveat (unchanged from before the consolidation): real,
+representative panel geometry from fifi.dat exercises the normal
+(non-degenerate) path, which is what the production assembly hits
+overwhelmingly; a genuinely degenerate panel is not exercised here.
 """
 import os
 import sys
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _PROJECT_ROOT = os.path.abspath(os.path.join(_THIS_DIR, ".."))
-_AD_REPO_SRC = r"C:\tlm\projects\automatic-differentiation-schemes-in-python\src"
-for p in (_PROJECT_ROOT, _AD_REPO_SRC):
-    if p not in sys.path:
-        sys.path.insert(0, p)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 import numpy as np
-from revad import Node, atan, sqrt as _sqrt, log as _log, jacobian # getting from _AD_REPO_SRC nearby but not in this repo! #todo: bring revad over so we don't have weird dependencies
 
 from rankine_panel.io import read_panel_file
 from rankine_panel.geometry import panel_geometry_all
-from rankine_panel.influence import hs_influence as hs_influence_primal
-
-
-# =============================================================================
-# Node-traced port of hs_influence (rankine_panel/influence.py::hs_influence,
-# same formula as rankine_panel/numba_kernels.py::hs_influence_nb).
-# Line-by-line structural match to the primal -- same branches, same loop --
-# just built from Node objects instead of plain floats.
-# =============================================================================
-
-def hs_influence_revad(fieldpoint, center, coordsys, corners_local, eps=1e-6):
-    """
-    fieldpoint, center: length-3 sequences of Node
-    coordsys: 3x3 nested list of Node, columns are (t1,t2,n)
-    corners_local: 2x4 nested list of Node
-    returns: [vx, vy, vz] as Node
-    """
-    # (fieldpoint - center) in the original influence.py:
-    dx0 = fieldpoint[0] - center[0]
-    dy0 = fieldpoint[1] - center[1]
-    dz0 = fieldpoint[2] - center[2]
-    
-    # coordsys.T @ (fieldpoint - center) in the original influence.py:
-    x = coordsys[0][0]*dx0 + coordsys[1][0]*dy0 + coordsys[2][0]*dz0
-    y = coordsys[0][1]*dx0 + coordsys[1][1]*dy0 + coordsys[2][1]*dz0
-    z = coordsys[0][2]*dx0 + coordsys[1][2]*dy0 + coordsys[2][2]*dz0
-
-    # node objects to be composed out of the incoming more primitive node-object-geometry (non-iteratively):
-    dphi0 = Node(0.0, [])
-    dphi1 = Node(0.0, [])
-    dphi2 = Node(0.0, [])
-
-    ip1 = (1, 2, 3, 0)
-
-    for k in range(4):
-        k2 = ip1[k]
-        xk, yk = corners_local[0][k], corners_local[1][k]
-        xk2, yk2 = corners_local[0][k2], corners_local[1][k2]
-
-        # dx adn dy in the original influence.py
-        edx = xk2 - xk
-        edy = yk2 - yk
-        d = _sqrt(edx*edx + edy*edy)
-        if d.val <= eps:
-            continue
-
-        r1 = _sqrt((x-xk)*(x-xk) + (y-yk)*(y-yk) + z*z)
-        r2 = _sqrt((x-xk2)*(x-xk2) + (y-yk2)*(y-yk2) + z*z)
-
-        s = r1 + r2
-        num = s - d
-        den = s + d
-        if num.val <= 0.0 or den.val <= 0.0:
-            continue
-
-        L = _log(num / den)
-        
-        # 
-        dphi0 = dphi0 + (edy / d) * L
-        dphi1 = dphi1 - (edx / d) * L
-        
-        # physics of this:  
-        if abs(edx.val) < 1e-30:
-            m = Node(float(np.sign(edy.val) * 1e30), [])
-        else:
-            m = edy / edx
-
-        e1 = (x - xk)*(x - xk) + z*z
-        h1 = (x - xk)*(y - yk)
-        r1 = _sqrt((x-xk)*(x-xk) + (y-yk)*(y-yk) + z*z)
-
-        e2 = (x - xk2)*(x - xk2) + z*z
-        h2 = (x - xk2)*(y - yk2)
-        r2 = _sqrt((x-xk2)*(x-xk2) + (y-yk2)*(y-yk2) + z*z)
-
-        denom1 = z * r1
-        denom2 = z * r2
-
-        if abs(denom1.val) > 1e-30 and abs(denom2.val) > 1e-30:
-            dphi2 = dphi2 + atan((m*e1 - h1) / denom1) - atan((m*e2 - h2) / denom2)
-
-    scale = -1.0 / (4.0 * np.pi)
-    dphi0 = dphi0 * scale
-    dphi1 = dphi1 * scale
-    dphi2 = dphi2 * scale
-
-    vx = coordsys[0][0]*dphi0 + coordsys[0][1]*dphi1 + coordsys[0][2]*dphi2
-    vy = coordsys[1][0]*dphi0 + coordsys[1][1]*dphi1 + coordsys[1][2]*dphi2
-    vz = coordsys[2][0]*dphi0 + coordsys[2][1]*dphi1 + coordsys[2][2]*dphi2
-
-    return [vx, vy, vz]
+from rankine_panel.influence import hs_influence
+from rankine_panel.revad import jacobian
 
 
 # =============================================================================
@@ -144,18 +52,18 @@ def pack(fieldpoint, center, coordsys, corners_local):
 def unpack_nodes(xs):
     fieldpoint = xs[0:3]
     center = xs[3:6]
-    coordsys = [[xs[6 + 3*i + j] for j in range(3)] for i in range(3)]
-    corners_local = [[xs[15 + 4*i + j] for j in range(4)] for i in range(2)]
+    coordsys = np.array(xs[6:15], dtype=object).reshape(3, 3)
+    corners_local = np.array(xs[15:23], dtype=object).reshape(2, 4)
     return fieldpoint, center, coordsys, corners_local
 
 
 def run_traced(xs_nodes):
-    fieldpoint, center, coordsys, corners_local = unpack_nodes(xs_nodes)  # already node valued objects by the time they get here through jacobian
-    return hs_influence_revad(fieldpoint, center, coordsys, corners_local)
+    fieldpoint, center, coordsys, corners_local = unpack_nodes(xs_nodes)  # already Node-valued by the time they get here, via jacobian()
+    return list(hs_influence(fieldpoint, center, coordsys, corners_local))
 
 
 # =============================================================================
-# Main: real panel geometry, revad Jacobian vs. central-FD on the primal
+# Main: real panel geometry, revad Jacobian vs. central-FD -- both via hs_influence
 # =============================================================================
 
 if __name__ == "__main__":
@@ -171,11 +79,11 @@ if __name__ == "__main__":
     x0 = pack(fieldpoint, center, coordsys, corners_local)
 
     print(f"Tracing hs_influence at real panel pair (fieldpoint=panel {ROW}, source panel {COL})")
-    print("primal value:", hs_influence_primal(fieldpoint, center, coordsys, corners_local))
+    print("primal value:", hs_influence(fieldpoint, center, coordsys, corners_local))
 
     J_revad = jacobian(run_traced, x0)  # (3, 23)
 
-    # central-FD Jacobian on the trusted plain-Python primal
+    # central-FD Jacobian, on the SAME hs_influence, called with plain floats
     eps = 1e-6
     N = x0.size
     J_fd = np.zeros((3, N), dtype=np.float64)
@@ -193,8 +101,8 @@ if __name__ == "__main__":
         scatter(xp, fp, cp, csp, clp)
         scatter(xm, fm, cm, csm, clm)
 
-        vp = hs_influence_primal(fp, cp, csp, clp)
-        vm = hs_influence_primal(fm, cm, csm, clm)
+        vp = hs_influence(fp, cp, csp, clp)
+        vm = hs_influence(fm, cm, csm, clm)
         J_fd[:, i] = (vp - vm) / (2.0 * eps)
 
     labels = (["fieldpoint%d" % i for i in range(3)]
