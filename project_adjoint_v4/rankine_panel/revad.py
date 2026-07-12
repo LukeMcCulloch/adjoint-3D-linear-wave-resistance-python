@@ -105,6 +105,21 @@ class Node:
         out = Node(self.val ** p, parents=[(self, p * (self.val ** (p - 1.0)))])
         return out
 
+    def sqrt(self):
+        """
+        A plain method (not a dunder -- Python has no __sqrt__) named to
+        match numpy's own object-array ufunc convention: np.sqrt(obj_array)
+        looks for and calls each element's .sqrt() method when the dtype
+        isn't a native numeric type. Confirmed empirically. Having this
+        means np.sqrt works directly on arrays of Node -- no
+        np.vectorize(sqrt) wrapper needed -- so
+        rankine_panel/geometry.py::panel_geometry_all's two branches
+        (ordinary float64 vs. AD) can share the literal same np.sqrt(...)
+        call. The free sqrt(x) function below now just dispatches here.
+        """
+        s = float(np.sqrt(self.val))
+        return Node(s, parents=[(self, 0.5 / s)])
+
     # ---- control-flow-only operators: plain values, no gradient tracking ----
 
     def __abs__(self):
@@ -160,8 +175,7 @@ def log(x):
 def sqrt(x):
     if not isinstance(x, Node):
         return math.sqrt(x)
-    s = float(np.sqrt(x.val))
-    return Node(s, parents=[(x, 0.5 / s)])
+    return x.sqrt()
 
 
 def atan(x):
