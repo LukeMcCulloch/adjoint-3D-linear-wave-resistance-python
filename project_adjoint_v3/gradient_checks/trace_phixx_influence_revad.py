@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
 """
+Computes:
+    d(Hessian) / d(panel geometry)
+
 This is an Oracle:
     pure Python, builds a full object graph, does dynamic dispatch through operator overloading
 

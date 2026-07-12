@@ -154,7 +154,7 @@ if njit is not None:
     @njit(cache=True)
     def phixx_influence_nb(fieldpoint, center, coordsys, corners_local, eps=1e-6):
         """
-        Returns global Hessian (3,3). Only (0,0) is used in your FS BC,
+        Returns global Hessian (3,3). Only (0,0) is used in the FS BC,
         but we return full matrix to match Fortran.
         """
         dx0 = fieldpoint[0] - center[0]

@@ -1,5 +1,8 @@
 # -*- coding: utf-8 -*-
 """
+Computes:
+    d(panel geometry) / d(vertices)
+    
 This is an Oracle:
     pure Python, builds a full object graph, does dynamic dispatch through operator overloading
 
