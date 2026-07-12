@@ -233,7 +233,7 @@ def grad(fun: Callable[[Sequence[Node]], Node], x: Array) -> Array:
     Gradient of scalar function f: R^n -> R (Node scalar output).
     """
     x = _as1d(x)
-    xs = [Node(float(xi), [], name=f"x{i}") for i, xi in enumerate(x)]
+    xs = [Node(float(xi), [], name=f"x{i}") for i, xi in enumerate(x)] # anything coming in the x array is turned into a node!
     y = fun(xs)
     backward(y)
     return np.array([v.grad for v in xs], dtype=np.float64)
