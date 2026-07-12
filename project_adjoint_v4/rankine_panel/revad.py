@@ -56,7 +56,11 @@ class Node:
     """
     val: float
     parents: List[Tuple["Node", float]]
-    grad: float = 0.0
+    grad: float = 0.0 # note!: this is not the grad of this node.  
+    # This grad says:
+    # if this node wiggles a little, 
+    # how much does the thing I called backward() on (the root)
+    # wiggle in response.
     name: Optional[str] = None
 
     def __add__(self, other):
@@ -215,6 +219,12 @@ def _toposort(root: Node) -> List[Node]:
 
 
 def backward(root: Node):
+    """
+    the procedure that fills every node's accumulator correctl
+    
+    node.grad is the accumulator
+
+    """
     # reset grads
     nodes = _toposort(root)
     for n in nodes:
@@ -253,3 +263,74 @@ def jacobian(fun: Callable[[Sequence[Node]], Sequence[Node]], x: Array) -> Array
         backward(y)
         J[k, :] = [v.grad for v in xs]
     return J
+
+
+if __name__ == "__main__":
+    # ==========================================================================
+    # Run this file directly (F5 in Spyder) to get x, g, f, a, b, h, etc. sitting
+    # in the console namespace afterward -- inspect them, change x.val and
+    # rerun bits by hand, whatever. This is meant to be poked at, not just read.
+    # ==========================================================================
+
+    print("="*70)
+    print("Example 1: f(x) = x*x + x, by hand, one Node at a time")
+    print("="*70)
+
+    x = Node(3.0, [])
+    print(f"x   = Node(val={x.val}, parents={x.parents})")
+
+    g = x * x
+    print(f"g=x*x  -> Node(val={g.val}, parents={g.parents})")
+    print("   ^ note: TWO entries in g.parents, both pointing at x -- one per")
+    print("     occurrence of x in x*x. Reuse of a variable = multiple parent edges.")
+
+    f = g + x
+    print(f"f=g+x  -> Node(val={f.val}, parents={f.parents})")
+
+    print("\nBefore backward(): every .grad is still 0.0 -- forward pass only so far.")
+    print(f"  x.grad={x.grad}  g.grad={g.grad}  f.grad={f.grad}")
+
+    backward(f)
+
+    print("\nAfter backward(f):")
+    print(f"  f.grad={f.grad}   (seeded to 1.0: df/df=1, the starting point)")
+    print(f"  g.grad={g.grad}   (got ONE contribution, from f's first parent-edge)")
+    print(f"  x.grad={x.grad}   (got THREE contributions: one from f directly,")
+    print("                    two from g, since x appeared twice in x*x)")
+    print(f"  check: d/dx(x*x+x) = 2x+1 = {2*3.0+1.0}  -- matches x.grad exactly, "
+          "and we never wrote that formula anywhere.")
+
+    print("\n" + "="*70)
+    print("Example 2: two independent leaves, h(a,b) = a*b + a")
+    print("="*70)
+
+    a = Node(3.0, [], name="a")
+    b = Node(4.0, [], name="b")
+    h = a * b + a
+    print(f"h.val = {h.val}")
+    backward(h)
+    print(f"a.grad = {a.grad}   (dh/da = b + 1 = {4.0+1.0})")
+    print(f"b.grad = {b.grad}   (dh/db = a     = {3.0})")
+
+    print("\n" + "="*70)
+    print("Example 3: the grad() and jacobian() convenience wrappers")
+    print("(these do exactly the 'make leaf Nodes, run fun, call backward()' dance")
+    print(" above for you -- see their source just above this block)")
+    print("="*70)
+
+    g_ab = grad(lambda xs: xs[0]*xs[1] + xs[0], np.array([3.0, 4.0]))
+    print(f"grad(a*b+a) at (3,4) = {g_ab}   (matches Example 2's [a.grad, b.grad])")
+
+    def F(xs):
+        a, b = xs
+        return [a*b, a + b]  # vector-valued: F(a,b) = (a*b, a+b)
+
+    J = jacobian(F, np.array([3.0, 4.0]))
+    print(f"jacobian(F) at (3,4) =\n{J}")
+    print("  row 0 = d(a*b)/d(a,b) = (b, a) = (4, 3)")
+    print("  row 1 = d(a+b)/d(a,b) = (1, 1)")
+
+    print("\nTry in the console: build your own Node, do some arithmetic on it,")
+    print("print .parents before backward(), then call backward(...) and look")
+    print("at .grad. Try reusing a variable 3+ times and predict the number of")
+    print("parent-edges before you count them.")

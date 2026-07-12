@@ -138,6 +138,23 @@ def panel_geometry_one_forward(corners):
 # =============================================================================
 
 def panel_geometry_one_backward(cache, d_center, d_coordsys, d_cornerslocal, d_area):
+    """
+    GENERAL RULE THAT EXPLAINS EVERY += IN THIS FUNCTION: whenever a forward
+    variable was used in more than one place (fed more than one downstream
+    expression), its adjoint must be the SUM of the adjoint contributions
+    coming back from every one of those uses -- that's just the multivariate
+    chain rule (d(L)/d(x) = sum over every path from x to L). Concretely:
+    `iv` is used directly in step 21 (center), step 13 (xi,eta dot products,
+    x4 corners), step 9 (jv=cross(nv,iv)) as BOTH args of that cross product
+    in a sense (once as-is, once via nv which depends on iv), and step 4 (its
+    own normalization). Every place you see `d_iv +=` below is one more of
+    those paths being added in. Get any of them wrong -- miss one, double
+    one, or add one at the wrong point in the walk (before its own upstream
+    adjoint is fully formed) -- and the two exact methods (this vs. the
+    revad oracle) would disagree by more than float roundoff. They agree to
+    7e-15, which is the actual evidence every path below is accounted for
+    exactly once, not a hopeful assumption.
+    """
     iv, jv, nv = cache['iv'], cache['jv'], cache['nv']
     iv_raw, nv_raw = cache['iv_raw'], cache['nv_raw']
     iv_norm, nv_norm = cache['iv_norm'], cache['nv_norm']
@@ -149,67 +166,119 @@ def panel_geometry_one_backward(cache, d_center, d_coordsys, d_cornerslocal, d_a
     xic, etac = cache['xic'], cache['etac']
     d_list = cache['d']
 
-    # ---- step 10: coordsys columns are iv,jv,nv directly ----
+    # ---- step 10: coordsys columns ARE iv,jv,nv (no computation, just a
+    # column stack) -- so its adjoint is just a slice-copy into three
+    # separate accumulators. These three (d_iv, d_jv, d_nv) are what steps
+    # 21, 13, 9, 6 below will keep adding more contributions into.
     d_iv = d_coordsys[:, 0].copy()
     d_jv = d_coordsys[:, 1].copy()
     d_nv = d_coordsys[:, 2].copy()
 
-    # ---- step 21: center = center0 + iv*xic + jv*etac ----
+    # ---- step 21: center = center0 + iv*xic + jv*etac
+    # THREE terms added together -> "z=x+y" rule fires three times: the
+    # upstream d_center flows unchanged into d_center0, AND into the
+    # "vec = vec*scalar" rule twice (once for iv*xic, once for jv*etac):
+    #   z = v*s  =>  dv += s*dz (elementwise scale),  ds += dot(v,dz)
     d_center0 = d_center.copy()
-    d_iv += xic * d_center
+    d_iv += xic * d_center                 # this iv's FIRST contribution (more below)
     d_xic = np.dot(iv, d_center)
-    d_jv += etac * d_center
+    d_jv += etac * d_center                # this jv's FIRST contribution (more below)
     d_etac = np.dot(jv, d_center)
 
-    # ---- step 20: cornerslocal[0][k]=xi[k]-xic, [1][k]=eta[k]-etac ----
-    d_xi = d_cornerslocal[0].copy()
+    # ---- step 20: cornerslocal[0][k]=xi[k]-xic, [1][k]=eta[k]-etac, k=0..3
+    # xic/etac get SUBTRACTED in all 4 of the k-indexed outputs, so their
+    # adjoint is minus the SUM over k of the 4 upstream cornerslocal
+    # adjoints (each of the 4 terms contributes independently, same "z=x-y"
+    # rule applied 4 times then summed since xic is the same variable in
+    # each of the 4 uses).
+    d_xi = d_cornerslocal[0].copy()         # each xi[k] used only here (so far) -> plain copy is fine as the FIRST source
     d_xic += -np.sum(d_cornerslocal[0])
     d_eta = d_cornerslocal[1].copy()
     d_etac += -np.sum(d_cornerslocal[1])
 
-    # ---- step 19: xic=momenteta/area, etac=momentxi/area ----
+    # ---- step 19: xic=momenteta/area, etac=momentxi/area  ("z=x/y" rule)
+    #   z=x/y  =>  dx += dz/y,  dy += -z*dz/y
+    # area is used TWICE overall: once directly as a returned output (the
+    # caller's upstream d_area), and again right here as the denominator
+    # for both divisions -- so its true total adjoint is the SUM of the
+    # caller-supplied d_area and these two local contributions. This is the
+    # same "multi-use -> sum the paths" rule as everything else, just
+    # spanning both an OUTPUT and an INTERNAL use of the same variable.
     d_momenteta = d_xic / area
     d_area_local = -xic * d_xic / area
     d_momentxi = d_etac / area
     d_area_local += -etac * d_etac / area
     d_area_total = d_area + d_area_local  # area is ALSO a direct output
 
-    # ---- step 18: momenteta = (1/6) sum_k deta[k]*Q[k], Q=xi_next^2+xi*xi_next+xi^2 ----
+    # ---- step 18: momenteta = (1/6) * sum_k deta[k]*Q[k],  Q=xi_next^2+xi*xi_next+xi^2
+    # A sum over k=0..3 means the SAME upstream scalar d_momenteta*(1/6)
+    # goes to EVERY one of the 4 terms unchanged (that's what "distribute
+    # the sum's adjoint" means -- d(sum_k f_k)/d(f_j) = 1 for every j, so
+    # the incoming adjoint just broadcasts). Within one term T2=deta*Q,
+    # that's a product rule; Q itself is a small quadratic in xi/xi_next,
+    # so THAT gets its own product+square rules (d(x^2)/dx = 2x).
     d_T2 = np.full(4, (1.0/6.0) * d_momenteta)
     Q = xi_next**2 + xi*xi_next + xi**2
-    d_deta = deta.copy() * 0.0  # init
+    d_deta = deta.copy() * 0.0  # deta's FIRST source of adjoint (step 16 below adds a second)
     d_deta += Q * d_T2
     d_Q = deta * d_T2
-    d_xi_next = 2*xi_next*d_Q + xi*d_Q
-    d_xi = d_xi + (xi_next*d_Q + 2*xi*d_Q)
+    d_xi_next = 2*xi_next*d_Q + xi*d_Q     # xi_next's FIRST source (steps 16, 15, then the step-14 scatter add more)
+    d_xi = d_xi + (xi_next*d_Q + 2*xi*d_Q)  # xi's SECOND source (first was step 20 above)
 
-    # ---- step 17: momentxi = (-1/6) sum_k dxi[k]*P[k], P=eta_next^2+eta*eta_next+eta^2 ----
+    # ---- step 17: momentxi = (-1/6) * sum_k dxi[k]*P[k],  P=eta_next^2+eta*eta_next+eta^2
+    # Exact mirror of step 18 with xi<->eta swapped and dxi in place of deta
+    # -- dxi/eta_next/eta each get their FIRST contribution here.
     d_T1 = np.full(4, (-1.0/6.0) * d_momentxi)
     P = eta_next**2 + eta*eta_next + eta**2
-    d_dxi = dxi.copy() * 0.0
+    d_dxi = dxi.copy() * 0.0                # dxi's ONLY source -- unlike deta, dxi is not reused in the area sum below
     d_dxi += P * d_T1
     d_P = dxi * d_T1
     d_eta_next = 2*eta_next*d_P + eta*d_P
-    d_eta = d_eta + (eta_next*d_P + 2*eta*d_P)
+    d_eta = d_eta + (eta_next*d_P + 2*eta*d_P)  # eta's SECOND source (first was step 20)
 
-    # ---- step 16: area = 0.5 sum_k deta[k]*(xi_next[k]+xi[k]) ----
+    # ---- step 16: area = 0.5 * sum_k deta[k]*(xi_next[k]+xi[k])
+    # deta gets its SECOND contribution here (first was step 18 -- it's
+    # used in both the area formula and the momenteta formula). xi_next and
+    # xi each get one more contribution too. Note d_deta must have BOTH
+    # contributions in before step 15 consumes it next -- that ordering is
+    # exactly why this function processes steps in the SAME order as the
+    # forward pass, just backwards: nothing gets read until everything that
+    # feeds it has already been written.
     d_S = np.full(4, 0.5 * d_area_total)
-    d_deta += (xi_next + xi) * d_S
+    d_deta += (xi_next + xi) * d_S          # deta: SECOND (and final) contribution, now fully accumulated
     d_xi_next = d_xi_next + deta * d_S
-    d_xi = d_xi + deta * d_S
+    d_xi = d_xi + deta * d_S                # xi: THIRD contribution
 
-    # ---- step 15: dxi=xi_next-xi, deta=eta_next-eta ----
+    # ---- step 15: dxi=xi_next-xi, deta=eta_next-eta  ("z=x-y" rule)
+    # d_dxi and d_deta are now FULLY accumulated (nothing later reuses them)
+    # so this is where they finally get spent, pushed onto xi_next/xi and
+    # eta_next/eta (note the MINUS sign on the xi/eta side, from "z=x-y").
     d_xi_next = d_xi_next + d_dxi
-    d_xi = d_xi - d_dxi
+    d_xi = d_xi - d_dxi                     # xi: FOURTH contribution
     d_eta_next = d_eta_next + d_deta
-    d_eta = d_eta - d_deta
+    d_eta = d_eta - d_deta                  # eta: THIRD contribution
 
-    # ---- step 14: xi_next[k]=xi[ip1[k]], eta_next[k]=eta[ip1[k]] ----
+    # ---- step 14: xi_next[k]=xi[ip1[k]], eta_next[k]=eta[ip1[k]]
+    # THE SCATTER STEP -- easiest one to get backwards. Forward direction:
+    # this just COPIES xi at index ip1[k] into xi_next at index k (no
+    # arithmetic, ip1=(1,2,3,0) is just "the next corner around the quad").
+    # So xi[ip1[k]] is the SOURCE and xi_next[k] is the COPY. The adjoint of
+    # a copy is "add the destination's adjoint into the source" -- so
+    # d_xi_next[k] (now fully formed, from steps 18+16+15 above) flows INTO
+    # d_xi[ip1[k]], not into d_xi[k]. This is xi's FIFTH and final
+    # contribution, and it's the only one that lands at a DIFFERENT index
+    # than the one triggering it.
     for k in range(4):
         d_xi[IP1[k]] += d_xi_next[k]
         d_eta[IP1[k]] += d_eta_next[k]
 
-    # ---- step 13: xi[k]=dot(d[k],iv), eta[k]=dot(d[k],jv) ----
+    # ---- step 13: xi[k]=dot(d[k],iv), eta[k]=dot(d[k],jv)  ("z=dot(a,b)" rule)
+    #   z=dot(a,b)  =>  da += b*dz,  db += a*dz
+    # d_xi is NOW fully accumulated (all 5 contributions in) and gets spent
+    # here. Note iv/jv are the SAME two vectors reused across all 4 corners
+    # k=0..3, so d_iv/d_jv each pick up FOUR more contributions in this one
+    # loop (one per corner) -- classic "used in a loop -> accumulate every
+    # iteration" pattern.
     d_d = [np.zeros(3) for _ in range(4)]
     for k in range(4):
         d_d[k] += iv * d_xi[k]
@@ -217,51 +286,75 @@ def panel_geometry_one_backward(cache, d_center, d_coordsys, d_cornerslocal, d_a
         d_d[k] += jv * d_eta[k]
         d_jv += d_list[k] * d_eta[k]
 
-    # ---- step 12: d[k]=corners[k]-center0 ----
+    # ---- step 12: d[k]=corners[k]-center0, k=0..3  ("z=x-y" rule x4)
+    # Each d[k] feeds exactly one corner directly (own index), but center0
+    # is SUBTRACTED in all 4 -- so d_center0 accumulates the NEGATIVE SUM
+    # of all 4 d_d[k] (same pattern as xic/etac in step 20, just vector-
+    # valued this time).
     d_c = [np.zeros(3) for _ in range(4)]
     for k in range(4):
         d_c[k] += d_d[k]
         d_center0 = d_center0 - d_d[k]
 
-    # ---- step 9: jv = cross(nv, iv) ----
+    # ---- step 9: jv = cross(nv, iv)  ("z=cross(a,b)" rule)
+    #   z=cross(a,b)  =>  da += cross(b,dz),  db += cross(dz,a)
+    # (sign/argument-order verified numerically against a hand-checked
+    # example before trusting it anywhere else in this file -- see the
+    # module docstring). d_jv is now fully accumulated and gets spent here;
+    # d_nv and d_iv each pick up one more contribution.
     d_nv += _cross(iv, d_jv)
     d_iv += _cross(d_jv, nv)
 
-    # ---- step 8: nv = nv_raw/nv_norm ----
+    # ---- step 8: nv = nv_raw/nv_norm  ("z=x/y" rule, vector/scalar form)
     d_nv_raw = d_nv / nv_norm
     d_nv_norm = -np.dot(nv, d_nv) / nv_norm
 
-    # ---- step 7: nv_norm = sqrt(dot(nv_raw,nv_raw)) ----
+    # ---- step 7: nv_norm = sqrt(dot(nv_raw,nv_raw))  ("z=sqrt(x)" rule)
+    # dot(x,x) has its own small product rule baked in: d(dot(x,x))/dx=2x.
     d_s2 = d_nv_norm * 0.5 / nv_norm
-    d_nv_raw = d_nv_raw + 2*nv_raw*d_s2
+    d_nv_raw = d_nv_raw + 2*nv_raw*d_s2     # nv_raw's SECOND contribution (normalize = divide-then-sqrt, both use it)
 
-    # ---- step 6: nv_raw = cross(iv, jvbar) ----
-    d_iv += _cross(jvbar, d_nv_raw)
+    # ---- step 6: nv_raw = cross(iv, jvbar)  ("z=cross(a,b)" rule)
+    # d_nv_raw is now fully accumulated (steps 8+7) and gets spent here.
+    d_iv += _cross(jvbar, d_nv_raw)         # iv's THIRD contribution (steps 21, 9, now this)
     d_jvbar = _cross(d_nv_raw, iv)
 
-    # ---- step 5: jvbar = m3 - m1 ----
+    # ---- step 5: jvbar = m3 - m1  ("z=x-y" rule)
     d_m3 = d_jvbar.copy()
     d_m1 = -d_jvbar.copy()
 
-    # ---- step 4: iv = iv_raw/iv_norm ----
+    # ---- step 4: iv = iv_raw/iv_norm  ("z=x/y" rule)
+    # d_iv is FULLY accumulated now (steps 21, 13x4, 9, 6 all done) --
+    # every remaining use of iv below this line is a NEW variable (iv_raw),
+    # not iv itself, so this is the last time d_iv gets read.
     d_iv_raw = d_iv / iv_norm
     d_iv_norm = -np.dot(iv, d_iv) / iv_norm
 
-    # ---- step 3: iv_norm = sqrt(dot(iv_raw,iv_raw)) ----
+    # ---- step 3: iv_norm = sqrt(dot(iv_raw,iv_raw))  (mirrors steps 7-8 for nv)
     d_s1 = d_iv_norm * 0.5 / iv_norm
     d_iv_raw = d_iv_raw + 2*iv_raw*d_s1
 
-    # ---- step 2: iv_raw = m2 - m4 ----
+    # ---- step 2: iv_raw = m2 - m4  ("z=x-y" rule)
     d_m2 = d_iv_raw.copy()
     d_m4 = -d_iv_raw.copy()
 
-    # ---- step 11: center0 = 0.25*(m1+m2+m3+m4) ----
+    # ---- step 11: center0 = 0.25*(m1+m2+m3+m4)
+    # d_center0 is fully accumulated (from steps 21 and 12) and gets spent
+    # here: distributes equally (x0.25) to all four midpoints -- this is
+    # each midpoint's SECOND contribution (first was steps 2/5 above, which
+    # ran "later" in this backward walk but correspond to an EARLIER
+    # forward step -- order among m1..m4's contributions doesn't matter,
+    # only that both are in before step 1 reads them).
     d_m1 = d_m1 + 0.25*d_center0
     d_m2 = d_m2 + 0.25*d_center0
     d_m3 = d_m3 + 0.25*d_center0
     d_m4 = d_m4 + 0.25*d_center0
 
-    # ---- step 1: m1=.5(c0+c1), m2=.5(c1+c2), m3=.5(c2+c3), m4=.5(c3+c0) ----
+    # ---- step 1: m1=.5(c0+c1), m2=.5(c1+c2), m3=.5(c2+c3), m4=.5(c3+c0)
+    # The last step -- every corner is shared by exactly two adjacent
+    # midpoints (e.g. c0 feeds m1 AND m4), so each d_c[k] below picks up
+    # its SECOND and final contribution here (first was step 12's direct
+    # d[k]=corners[k]-center0 term). After this, d_c[0..3] are complete.
     d_c[0] += 0.5*d_m1
     d_c[1] += 0.5*d_m1
     d_c[1] += 0.5*d_m2
