@@ -271,6 +271,22 @@ if __name__ == "__main__":
     # in the console namespace afterward -- inspect them, change x.val and
     # rerun bits by hand, whatever. This is meant to be poked at, not just read.
     # ==========================================================================
+    
+    """
+    intuition:
+        in forward mode, you pick an input direction first, seed it, 
+        and propagate forward — so by the time you reach the output, 
+        every intermediate (including the final one) is carrying "how much do I move per unit move in that one input I picked." 
+        The answer lives at the end of the computation, same direction as the computation itself. 
+    
+    meanwhile:
+        In reverse mode, you pick an output first, seed it with 1.0, 
+        and propagate backward — so by the time you reach any given input, 
+        it's carrying "how much does that one output I picked move per unit move in me." 
+        The answer lives at the inputs, opposite direction from the computation. 
+        Same math, opposite bookkeeping direction — that's genuinely disorienting the first time, 
+        not a sign you're missing something.
+    """
 
     print("="*70)
     print("Example 1: f(x) = x*x + x, by hand, one Node at a time")
