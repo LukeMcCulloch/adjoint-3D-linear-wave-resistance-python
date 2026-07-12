@@ -219,3 +219,9 @@ if __name__ == "__main__":
     print(f"max relative error (entries with |value|>1e-8): {max_rel_err:.3e}")
     print(f"  worst-rel entry: d{worst_rel[1]}/d{worst_rel[0]}  revad={worst_rel[2]:.8e}  "
           f"fd={worst_rel[3]:.8e}  rel={worst_rel[4]:.3e}")
+    
+    
+    
+    # real FD truncation error should shrink roughly as eps**2 as eps shrinks (down to where cancellation error start to dominate and reverse the trend)
+    # indeed in testing we see as eps drops by 1 order of mag, eps error measures drop by 2 orders of magnitude.
+    #
