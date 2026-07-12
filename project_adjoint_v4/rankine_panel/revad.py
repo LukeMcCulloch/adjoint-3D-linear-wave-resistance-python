@@ -118,7 +118,7 @@ class Node:
         call. The free sqrt(x) function below now just dispatches here.
         """
         s = float(np.sqrt(self.val))
-        return Node(s, parents=[(self, 0.5 / s)])
+        return Node(s, parents=[(self, 0.5 / s)])# note!: in geometry.py, we continue using the np.vectorize(sqrt) because it turns out to be 25% faster
 
     # ---- control-flow-only operators: plain values, no gradient tracking ----
 
