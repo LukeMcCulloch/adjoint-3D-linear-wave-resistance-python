@@ -83,6 +83,23 @@ class Node:
     def __mul__(self, other):
         other = other if isinstance(other, Node) else Node(float(other), [])
         out = Node(self.val * other.val, parents=[(self, other.val), (other, self.val)])
+        #
+        # let: x.val = 2.0, y.val = 5.0, f = x*y.
+        #
+        # out = Node(self.val * other.val, parents=[(self, other.val), (other, self.val)])
+        #
+        # Here self is x, other is y. Substituting the actual values:
+        #
+        # out = Node(2.0*5.0, parents=[(x, 5.0), (y, 2.0)])
+        #
+        # so  df/dx  = 5.0
+        # and df/dy = 2.0
+        #
+        # parents means (parent, basically local D (of the return function) with respect to this parent)
+        #
+        # not this automatically catches values on the way
+        # this is possibly to do with it being an efficient dynamic programming method.
+        #
         return out
 
     def __rmul__(self, other):
