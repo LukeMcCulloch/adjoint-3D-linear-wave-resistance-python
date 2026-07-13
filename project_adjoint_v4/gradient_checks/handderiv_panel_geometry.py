@@ -177,6 +177,26 @@ def panel_geometry_one_forward(corners):
 
 def panel_geometry_one_backward(cache, d_center, d_coordsys, d_cornerslocal, d_area):
     """
+    This is the hand-derived backward pass for one panel's geometry
+    
+    computes gradients with respect to this one panel's geometry, 
+    and this panel's geometry is defined by 4 corner points, each a 3D position
+    
+    Given the upstream adjoint (sensitivity of some downstream scalar loss L)
+    with respect to each of this panel's four outputs, 
+    returns the adjoint with respect to each of the panel's 
+    four corner positions 
+    -- dL/d(corner_k) for k=0..3, summed over every path from that corner 
+    through this panel's geometry formula to L.
+
+    This function is LOCAL to one panel: it knows nothing about which
+    global mesh vertex each corner corresponds to. That integer bookkeeping
+    (panel -> global vertex index) lives outside this function -- see the
+    __main__ block below for the GATHER (int index -> float corner
+    position) that has to happen before calling the forward pass. Nothing
+    here does the corresponding SCATTER-ADD (local gradient -> global
+    per-vertex gradient array) yet -- that's still-pending work, needed
+    once this gets embedded in the full assembly loop.
     
     why are all array inputs float arrays?  
      - is there no more integer mapping between panels and vertices needed?
@@ -184,27 +204,50 @@ def panel_geometry_one_backward(cache, d_center, d_coordsys, d_cornerslocal, d_a
     Parameters
     ----------
     cache : dict
-        cache of every intermmediate result from the fwd pass
+        cache of every intermmediate result from the fwd pass on this panel.
+        Plain float / numpy.ndarray
+        values only, never revad.Node -- the whole point of a static
+        backward pass is that it never needs a dynamic graph.
+       
     d_center : numpy.ndarray
-        the centroid of this panel in (x,y,z) global coordinates
+    
+        fwd: the centroid of this panel in (x,y,z) global coordinates
+        
+        bckwd: Upstream adjoint dL/d(center): sensitivity of the loss to this
+        panel's centroid, one component per (x,y,z).
+        
     d_coordsys : numpy.ndarray [3x3]
         the local coordinate system on this panel, in terms of 3 float vectors: (iv, jv, nv)
         note: column oriented vectors iv, etc. in (iv, jv, nv)
+        
     d_cornerslocal : numpy.ndarray [2x4]
         xi, eta coordinates of this panel computed in fwd mode
+        
     d_area : float
         the area of this panel.
 
     Returns
     -------
-    TYPE
-        DESCRIPTION.
-    TYPE
-        DESCRIPTION.
-    TYPE
-        DESCRIPTION.
-    TYPE
-        DESCRIPTION.
+    
+    4 3-vectors:
+        
+        
+        
+        
+    d_c0 : numpy.ndarray, shape (3,)
+        dL/d(corner_0) -- gradient of the loss w.r.t. corner 0's global
+        (x,y,z) position, summed over every path corner 0 feeds (its own
+        midpoints, iv/jv/nv, xi/eta, moments, center -- whichever of the
+        four upstream adjoints above are nonzero).
+        
+    d_c1 : numpy.ndarray, shape (3,)
+        dL/d(corner_1), same meaning as d_c0.
+        
+    d_c2 : numpy.ndarray, shape (3,)
+        dL/d(corner_2), same meaning as d_c0.
+        
+    d_c3 : numpy.ndarray, shape (3,)
+        dL/d(corner_3), same meaning as d_c0.
     
     
     
@@ -224,6 +267,13 @@ def panel_geometry_one_backward(cache, d_center, d_coordsys, d_cornerslocal, d_a
     revad oracle) would disagree by more than float roundoff. They agree to
     7e-15, which is the actual evidence every path below is accounted for
     exactly once, not a hopeful assumption.
+    
+    
+    The 21 outputs (rows) — everything panel_geometry_one_forward returns, flattened:
+        these are the inputs to the backward pass
+    
+    The 12 inputs (columns) — panel 0's 4 corners, 3 coordinates each:
+        these are the outputs to the backward pass
     """
     # pull the cache into locals
     iv, jv, nv = cache['iv'], cache['jv'], cache['nv']
@@ -464,14 +514,40 @@ if __name__ == "__main__":
         return [[xs[3*k+i] for i in range(3)] for k in range(4)]
 
     def run_traced(xs_nodes):
+        '''
+
+        Parameters
+        ----------
+        xs_nodes : Node-valued
+            DESCRIPTION.
+
+        Returns
+        -------
+        out : Node-valued
+            flattened ctr, csy, cl, ar
+            
+        This is the function jacobian() will call. 
+        - It unpacks the (Node-valued) flat input, 
+        - calls the existing, already-validated panel_geometry_one from geometry.py 
+        - note, not the hand-derived _forward — on those Nodes, 
+            - which builds a dynamic graph via operator overloading 
+                as a side effect of just running normally. 
+            - Then it flattens the 4 oracle outputs 
+                into one flat list of 21 Node-valued scalars (3 center + 9 coordsys + 8 cornerslocal + 1 area), 
+            - matching the "21 outputs" convention used throughout this file.
+
+        '''
         c = unpack_nodes(xs_nodes)
-        ctr, csy, cl, ar = panel_geometry_one(c)
+        ctr, csy, cl, ar = panel_geometry_one(c) # panel_geometry_one is the existing dynamic revAD version for one panel's geometry
         out = list(ctr) + [csy[r][c2] for r in range(3) for c2 in range(3)] + \
               [cl[a][b] for a in range(2) for b in range(4)] + [ar]
         return out
+    
+    
 
-    x0 = pack(corners_xyz0)
-    J_oracle = jacobian(run_traced, x0)  # (21, 12)
+    x0 = pack(corners_xyz0) # x0 is the real length-12 float vector for panel 0's actual corners
+    J_oracle = jacobian(run_traced, x0)  # (21, 12) ... the jacobian of the oracle (dynamic revAD version)
+    # jacobian returns the full (21,12) ground-truth Jacobian — this is the ORACLE we're validating against
 
     out_labels = (["center%d" % i for i in range(3)]
                   + ["coordsys%d%d" % (i, j) for i in range(3) for j in range(3)]
@@ -481,23 +557,62 @@ if __name__ == "__main__":
     max_abs_err = 0.0
     worst = None
     J_hand = np.zeros((21, 12))
+    # heart of the validation
+    '''
+    Build the seed gradient:
+        
+        - across all 21 numbers spread over these four containers,  (d_center, d_coordsys, d_cornerslocal, d_area)
+          - exactly one number is 1.0 
+          - and the other twenty are 0.0, on every single call.
+        
     for o, olab in enumerate(out_labels):
+        # o says: if I only care about this output component, `o', what's its gradient w.r.t. all 12 inputs?
+        #
+        # across all 21 numbers spread over these four containers, 
+        #   exactly one number is 1.0 
+        #   and the other twenty are 0.0, on every single call.
+        #
         d_center = np.zeros(3); d_coordsys = np.zeros((3, 3)); d_cornerslocal = np.zeros((2, 4)); d_area = 0.0
         if o < 3:
-            d_center[o] = 1.0
+            d_center[o] = 1.0 # seeding the gradient
         elif o < 12:
             idx = o - 3
-            d_coordsys[idx // 3, idx % 3] = 1.0
+            d_coordsys[idx // 3, idx % 3] = 1.0 #seeding the gradient
         elif o < 20:
             idx = o - 12
-            d_cornerslocal[idx // 4, idx % 4] = 1.0
+            d_cornerslocal[idx // 4, idx % 4] = 1.0 # seeding the gradient
         else:
-            d_area = 1.0
-
+            d_area = 1.0 # seeding the gradient
+             
+    '''
+    # easier to read version of the same grad seed builder 
+    for o in range(21):
+        olab = out_labels[o]
+        s = np.zeros(21) # set all the seeds to 0 each pass
+        s[o] = 1.0 # set exactly 1 component to 1.
+    
+        d_center       = s[0:3]
+        d_coordsys     = s[3:12].reshape(3, 3)
+        d_cornerslocal = s[12:20].reshape(2, 4)
+        d_area         = s[20]
+        
+        # if I only care about this output component, `o', what's its gradient w.r.t. all 12 inputs?
         d_c0, d_c1, d_c2, d_c3 = panel_geometry_one_backward(cache, d_center, d_coordsys, d_cornerslocal, d_area)
+        # d_c0, d_c1, d_c2, d_c3 are each 3-vectors
+        #   the actual per-vertex gradient components that get summed into the final 3·Nverts output
+        # there are 4 components because a panel is a quad.
+        
         row_hand = np.concatenate([d_c0, d_c1, d_c2, d_c3])
         J_hand[o, :] = row_hand
-
+        # Runs your hand-derived backward pass with that one-hot seed, 
+        # getting back one row of a (21,12) Jacobian 
+        #   - literally building up the full matrix one backward pass at a time, 21 calls total, 
+        #   - mirroring exactly what jacobian() does internally (next section) 
+        #   - except using the hand-derived backward pass instead of Node.backward().
+        
+        
+        # Compare row_hand against the same row of the oracle Jacobian, 
+        # tracking the worst discrepancy across all 21 rows for the final report.
         row_oracle = J_oracle[o, :]
         err = np.max(np.abs(row_hand - row_oracle))
         if err > max_abs_err:

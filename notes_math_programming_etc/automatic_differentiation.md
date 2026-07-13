@@ -177,6 +177,26 @@ A Directed Acyclic Graph, by definition, has no cycles — and a basic theorem a
 
  In our case, the direction isn't an arbitrary convention we're imposing — it's forced by ordinary program execution: you cannot write x*y before x and y already exist. The order in which nodes get constructed is automatically a valid topological order (parents-before-children), because it's physically impossible to reference something before it's built. That's why "who used v_i" (its children) is well-defined even though we never stored a children list: _toposort's DFS walks from the root through .parents and appends each node after visiting all its parents, which produces exactly the parents-first order; backward() then processes reversed(nodes) — children-first — which is precisely the requirement for reverse accumulation (a node's adjoint can't be finalized until everything that used it has already contributed).
 
+
+## terminology
+
+Leaves = the independent variables. In jacobian(), these are the xs — Node objects built with parents=[] (empty list, literally nothing upstream). Nothing computed them; they're where the graph starts.
+
+Root = whatever node you call backward() on. In jacobian()'s loop, each y in ys takes a turn being the root — root is just "the node I'm currently asking about," the top of whatever subgraph is reachable by walking backward through parents from that node.
+
+"Seeded" means: the one line root.grad = 1.0. That's it — that's the entire seeding operation. Here's why it's 1.0 and why that's the right starting value.
+
+
+Recall from the file itself: node.grad means "how much does the thing I called backward() on change, per unit change in this node." For root itself, that question is trivial: "how much does root change per unit change in root?" — obviously 1, since root is root. That's the base case the whole recursion bootstraps from. Everything else's .grad gets built up from that starting value as backward() walks outward (toward the leaves), via the chain-rule line p.grad += g * local.
+
+Concretely, with the file's own f = x*x + x example (x=3): calling backward(f) does f.grad = 1.0 first. Then walking backward: g.grad picks up f.grad * 1.0 = 1.0 (from f's first parent-edge), and x.grad picks up contributions from both f directly (f.grad * 1.0) and from g (g.grad * 3.0 and g.grad * 3.0 again, once per occurrence of x in x*x) — ending at x.grad = 1 + 3 + 3 = 7 = 2(3)+1, matching the closed form. None of that would mean anything without first fixing f.grad = 1.0 as the anchor value everything else is computed relative to.
+
+Two connections worth making explicit:
+
+- This is the same "seed" word as in forward-mode AD, just planted at the opposite end — forward-mode seeds an input direction (asks "how much does everything move per unit move in this one input"), reverse-mode seeds the output (asks "how much does this one output move per unit move in everything upstream"). Same word, different end of the graph — the file's own __main__ docstring block says this explicitly, worth rereading now that it's concrete.
+
+- It's also exactly the one-hot idea from a moment ago, just at its smallest possible scale: a scalar root has only one component to seed, so root.grad=1.0 is trivially "one-hot" — there's nothing else it could be zero relative to. jacobian()'s loop over ys is what turns this into genuine one-hot-over-many-outputs behavior: each backward(y) call first zeroes every reachable node's grad (including ones shared with other outputs' subgraphs — center, coordsys, cornerslocal, area all reuse a lot of the same upstream nodes like iv, jv, xic), then seeds just that one y to 1.0. So each of the 21 calls starts from a clean slate, seeds exactly one output, and nothing leaks between them even though they share most of the underlying graph.
+
 ---
 
 
@@ -200,3 +220,44 @@ But you've spotted the real problem, and it's not a forward-vs-reverse question 
 That's exactly why the matrix-free principle from a few turns back isn't a performance optimization bolted on top of AD — it's the thing that makes reverse mode applicable at all here. phi := lam^T(A@sigma - b) collapses $m$ from 11 million down to 1 (one scalar), by contracting with lam and sigma before differentiating, not after. Once $m=1$, reverse mode is unconditionally the right choice regardless of how large $N$ (vertex count) is — that's the $m<N$ inequality satisfied about as favorably as it can be. So: your instinct that "many outputs" is a real problem for reverse mode is completely correct — we just never actually hand reverse mode a many-output problem. We always reduce to one scalar first.
 
 (One honest caveat for later, not now: on real GPU hardware, forward mode's "$O(N)$ work per node, one pass" has a shape that maps very naturally onto wide SIMD/vector hardware, and reverse mode's "$m$ separate passes" can also be parallelized — run all $m$ backward sweeps concurrently across threads. So the FLOP-count argument above is the right first-order answer, but constant factors and parallelization opportunities matter more once you're actually on a GPU than they do in this asymptotic count. Worth remembering for the CUDA phase, not something to chase now.)
+
+
+
+
+# Some details with backprop the first geometry layer 
+
+The first layer is going from points and panels to all the local coordinate description.
+
+And so in reverse mode, it goes from the local panel coordinates, area, etc., back to the points and panels description.
+
+
+
+One-hot is standard terminology (borrowed from ML, but the concept predates that): a vector that's all zeros except a single entry set to 1 — the one "hot" (active) slot, everything else "cold" (zero). [0,0,1,0,0] is a one-hot vector with the hot slot at index 2.
+
+And to your question directly: it's the opposite of what you said. The if o < 3: ... block doesn't build the gradient — it builds the query. panel_geometry_one_backward is where the actual gradient computation happens (every +=, every local-derivative multiply, all 21 reverse steps of chain rule). The seed-construction block just decides which question to hand it.
+
+Here's why that distinction matters. panel_geometry_one_backward doesn't compute "the Jacobian" — it computes a vector-Jacobian product: given some weighting over the 21 outputs (how much you care about each one), it returns the weighted combination of that many rows of the Jacobian, summed together. Concretely, if $J$ is the true $(21,12)$ Jacobian and $s$ is your seed vector (length 21), the function computes $s^T J$ — a single length-12 vector, a weighted sum of rows.
+
+If $s$ is one-hot — say 1 at slot o, zero everywhere else — then $s^T J$ degenerates to picking out row o alone, since every other row gets multiplied by 0 and vanishes from the sum. That's the whole trick: one-hot seeds are how you make a "weighted sum of rows" machine hand you back individual, unweighted rows, one at a time.
+
+A tiny concrete example, separate from the panel code so the mechanism is crisp:
+
+$$
+g(x,y) = (xy, x+y),
+\qquad
+J =
+\begin{pmatrix}
+y & x \\
+1 & 1
+\end{pmatrix}.
+$$
+
+Suppose vjp(s0, s1) computes $s_0 \cdot(y,x) + s_1\cdot(1,1)$ (the weighted row-sum, exactly what a backward pass does for a 2-output function).
+
+vjp(1, 0) → $(y, x)$ — row 0 alone. One-hot on output 0.
+vjp(0, 1) → $(1, 1)$ — row 1 alone. One-hot on output 1.
+vjp(1, 1) → $(y+1,\ x+1)$ — not one-hot, this is a genuine sum of both rows, not either individually. Useful for other things (e.g. "total sensitivity if both outputs matter equally"), but not for reconstructing $J$ row by row.
+Same story in the real code: panel_geometry_one_backward(cache, d_center, d_coordsys, d_cornerslocal, d_area) is a general-purpose vector-Jacobian-product machine — it accepts any weighting across the 21 outputs (that's literally what production use looks like, where the real seed comes from lam, not a one-hot). The if o<3:... block is just the validation harness abusing that generality 21 times in a row, each time with a one-hot seed, purely to reconstruct the full matrix for comparison against the oracle. In actual production use (the eventual phi = lam^T(A@sigma-b) target), the seed won't be one-hot at all — it'll be whatever lam actually is, and you'll call the backward pass once, not 21 times, because you only ever want one scalar's gradient, not a full Jacobian.
+
+
+

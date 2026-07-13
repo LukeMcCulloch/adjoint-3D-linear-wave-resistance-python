@@ -220,6 +220,31 @@ def atan2(y, x):
 
 
 def _toposort(root: Node) -> List[Node]:
+    """
+    a postorder DFS starting from root, walking backward through parents edges
+    
+    Because a node is appended only after recursing into all of its parents, 
+        leaves (no parents) get appended first and 
+        root gets appended last. 
+        So order = [..leaves.., ..., root].
+
+    def dfs(n):
+        if id(n) in seen: return      # already visited -- diamond-shaped graphs
+        seen.add(id(n))               #   (e.g. x used twice in x*x) must not
+        for p, _ in n.parents: dfs(p) #   be visited/appended twice
+        order.append(n)               # append AFTER all parents are appended
+        
+    Parameters
+    ----------
+    root : Node
+        DESCRIPTION.
+
+    Returns
+    -------
+    List[Node]
+        DESCRIPTION.
+
+    """
     order: List[Node] = []
     seen = set()
 
@@ -244,15 +269,15 @@ def backward(root: Node):
     """
     # reset grads
     nodes = _toposort(root)
-    for n in nodes:
+    for n in nodes:                     # fresh start every call
         n.grad = 0.0
-    root.grad = 1.0
+    root.grad = 1.0                     # seed: d(root)/d(root) = 1
 
     # reverse accumulation
-    for n in reversed(nodes):
+    for n in reversed(nodes):           # root FIRST, leaves LAST
         g = n.grad
         for p, local in n.parents:
-            p.grad += g * local
+            p.grad += g * local         # the actual chain-rule step
 
 
 def grad(fun: Callable[[Sequence[Node]], Node], x: Array) -> Array:
