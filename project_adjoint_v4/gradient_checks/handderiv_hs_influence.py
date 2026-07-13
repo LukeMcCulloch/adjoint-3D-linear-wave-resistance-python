@@ -4,6 +4,8 @@ HAND-DERIVED (not auto-traced) reverse-mode backward pass for hs_influence
 (rankine_panel/influence.py::hs_influence, same formula as
 rankine_panel/numba_kernels.py::hs_influence_nb).
 
+(see hs_influence_revad from v3, hs_influence_revad in gradient_checks.py for the original function)
+
 Same idea as handderiv_panel_geometry.py: no revad.Node, no dynamic graph,
 no operator overloading -- a forward pass that computes the primal AND
 caches every intermediate the backward pass needs, then a backward pass
@@ -182,7 +184,11 @@ def hs_influence_forward(fieldpoint, center, coordsys, corners_local, eps=1e-6):
     dphi2 *= scale
 
     v = coordsys @ np.array([dphi0, dphi1, dphi2])
-
+    
+    
+    # what is this cache?: (at this point it looks simpler to write the AST source to source machine)
+    #
+    # forward pass caches every intermediate
     cache = dict(coordsys=coordsys, dx0=dx0, dy0=dy0, dz0=dz0, z=z,
                  scale=scale, dphi0=dphi0, dphi1=dphi1, dphi2=dphi2,
                  edges=edges)
@@ -194,6 +200,10 @@ def hs_influence_forward(fieldpoint, center, coordsys, corners_local, eps=1e-6):
 # =============================================================================
 
 def hs_influence_backward(cache, d_vx, d_vy, d_vz):
+    
+    #----------------------------------------------
+    # set up the basic data at the leaf nodes:
+    #
     coordsys = cache['coordsys']
     dx0, dy0, dz0 = cache['dx0'], cache['dy0'], cache['dz0']
     z = cache['z']
