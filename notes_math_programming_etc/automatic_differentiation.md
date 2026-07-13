@@ -178,3 +178,25 @@ A Directed Acyclic Graph, by definition, has no cycles — and a basic theorem a
  In our case, the direction isn't an arbitrary convention we're imposing — it's forced by ordinary program execution: you cannot write x*y before x and y already exist. The order in which nodes get constructed is automatically a valid topological order (parents-before-children), because it's physically impossible to reference something before it's built. That's why "who used v_i" (its children) is well-defined even though we never stored a children list: _toposort's DFS walks from the root through .parents and appends each node after visiting all its parents, which produces exactly the parents-first order; backward() then processes reversed(nodes) — children-first — which is precisely the requirement for reverse accumulation (a node's adjoint can't be finalized until everything that used it has already contributed).
 
 ---
+
+
+---
+
+# Performance
+
+Q. Is reverse mode still better when there are many outputs too?
+- You've found the actual sharp edge, and no — reverse mode is not automatically better once outputs get numerous. Let's get the real cost comparison right, because "one pass vs. many passes" is the wrong way to compare them.
+
+Forward mode's real cost: one pass, but each elementary operation does $O(N)$ work (since every node carries a length-$N$ vector, and updating it — e.g. z.grad = y.val*x.grad_vec + x.val*y.grad_vec — touches all $N$ components). Total: $O(N \times \text{graph size})$.
+
+Reverse mode's real cost: $m$ passes (one per output), but each pass does $O(1)$ work per elementary operation (pure scalars). Total: $O(m \times \text{graph size})$.
+
+So the honest comparison is $N$ vs. $m$, not "1 pass" vs. "$m$ passes." Reverse mode wins exactly when $m < N$.
+
+Check it against our actual kernels: hs_influence has $N=23$ inputs, $m=3$ outputs → reverse costs $3\times$graph-size vs. forward's $23\times$ — reverse wins by ~7.7×. phixx_influence has $N=23$, $m=9$ → reverse costs $9\times$ vs. $23\times$ — still wins, by ~2.6×, smaller margin but real. So for both kernels we actually built, there's no misunderstanding — reverse mode genuinely is cheaper, the numbers just work out that way because $m<N$ in both cases.
+
+But you've spotted the real problem, and it's not a forward-vs-reverse question — it's what happens if you literally tried to differentiate the whole matrix A: $N\approx 10{,}665$ (all vertex components), and if you wanted the full dA/d(vertices) tensor, $m \approx N^2 \approx 11{,}300{,}000$ (every entry of A). Forward mode costs $\sim N\times(\text{graph size})$ — astronomically expensive because $N$ is huge already. Reverse mode costs $\sim m\times(\text{graph size})$ — also astronomically expensive, from the opposite direction, because $m$ is now huge. Neither mode wins — both lose, for different reasons. This isn't a "pick the smarter algorithm" situation; it's a "you're asking for an object that's too big to exist" situation.
+
+That's exactly why the matrix-free principle from a few turns back isn't a performance optimization bolted on top of AD — it's the thing that makes reverse mode applicable at all here. phi := lam^T(A@sigma - b) collapses $m$ from 11 million down to 1 (one scalar), by contracting with lam and sigma before differentiating, not after. Once $m=1$, reverse mode is unconditionally the right choice regardless of how large $N$ (vertex count) is — that's the $m<N$ inequality satisfied about as favorably as it can be. So: your instinct that "many outputs" is a real problem for reverse mode is completely correct — we just never actually hand reverse mode a many-output problem. We always reduce to one scalar first.
+
+(One honest caveat for later, not now: on real GPU hardware, forward mode's "$O(N)$ work per node, one pass" has a shape that maps very naturally onto wide SIMD/vector hardware, and reverse mode's "$m$ separate passes" can also be parallelized — run all $m$ backward sweeps concurrently across threads. So the FLOP-count argument above is the right first-order answer, but constant factors and parallelization opportunities matter more once you're actually on a GPU than they do in this asymptotic count. Worth remembering for the CUDA phase, not something to chase now.)
