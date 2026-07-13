@@ -38,12 +38,12 @@ def read_panel_file(path: str) -> PanelFile:
     N = npanels + nfspanels
 
     # panels: 4 x N
-    panels_flat = [int(next(it)) for _ in range(4 * N)]
+    panels_flat = [int(next(it)) for _ in range(4 * N)] # (int) reads in the 4 vertex id's per panel
     panels = np.array(panels_flat, dtype=np.int64).reshape((4, N), order="F")
     panels -= 1  # 1-based -> 0-based
 
     # points: 3 x npoints
-    points_flat = [float(next(it)) for _ in range(3 * npoints)]
+    points_flat = [float(next(it)) for _ in range(3 * npoints)] # float reads in the vertex data for the ith vertex in the panel array above
     points = np.array(points_flat, dtype=np.float64).reshape((3, npoints), order="F")
 
     return PanelFile(title, i, j, npanels, nfspanels, npoints, deltax, panels, points)

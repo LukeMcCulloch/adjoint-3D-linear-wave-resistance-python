@@ -4,13 +4,17 @@ HAND-DERIVED (not auto-traced) reverse-mode backward pass for
 panel_geometry_one / panel_geometry_all's per-panel formula.
 
 This is Track B, step 2 of the plan: no revad.Node, no dynamic graph, no
-operator overloading -- a forward pass that computes the primal values AND
-caches every intermediate the backward pass needs, then a backward pass
-that walks those steps in EXACT reverse order applying the chain rule by
-hand. This is the actual shape of what a numba/CUDA adjoint kernel looks
-like -- static, no runtime graph -- and is checked against
-revad's automatic backward pass (trace_panel_geometry_revad.py /
-rankine_panel.geometry.panel_geometry_one), not derived from it.
+operator overloading -- 
+- a forward pass 
+    - that computes the primal values 
+        AND caches every intermediate the backward pass needs, 
+- then a backward pass
+    - that walks those steps in EXACT reverse order 
+        applying the chain rule by hand. 
+- This is the actual shape of what a numba/CUDA adjoint kernel looks
+    like -- static, no runtime graph -- and is checked against
+    revad's automatic backward pass (trace_panel_geometry_revad.py /
+    rankine_panel.geometry.panel_geometry_one), not derived from it.
 
 FORWARD STEPS (numbered, matches panel_geometry_all's per-panel formula
 exactly -- see geometry.py):
@@ -64,6 +68,8 @@ from rankine_panel.geometry import panel_geometry_one
 from rankine_panel.revad import jacobian
 
 
+# index of "the next index around the corner" from the stard ordering:
+# so index 0 sees the next index as 1 and so on
 IP1 = (1, 2, 3, 0)
 
 
@@ -78,19 +84,49 @@ def _cross(a, b):
 # =============================================================================
 
 def panel_geometry_one_forward(corners):
+    """
+    This is just panel_geometry_all 
+     - for a specific set of (4) corners [c0-c3]
+     - with all the vectorized numpy calls unrolled for generic acceleration 
+         (my target is numba, but also forward looking towards c++ cuda - something similar will be needed
+          whether hand rolled like this, or generated via my baby JAX todo).
+         
+    # Q: could we not make due with our standard panel_geometry_all since it has the dispatch handled up front?
+    # A: no, that dispatch itself precludes this.
+        - as well as assigning intermmediates
+        - and caching intermediates at the end
+    
+    
+    Importantly: in this function we save every intermmediate uniquely.
+    That makes it possible to chache it
+    Which makes revAD possible
+
+    """
+    # no dispatch needed, this is for accelerators only
+    
+    # no working arrays as we only deal with one panel (4 corners)
+    
+    # 1) m1,m2,m3,m4   = corner midpoints
     c0, c1, c2, c3 = [np.asarray(c, dtype=np.float64) for c in corners]
-
     m1 = 0.5*(c0+c1); m2 = 0.5*(c1+c2); m3 = 0.5*(c2+c3); m4 = 0.5*(c3+c0)
-
+    
+    # 2) iv_raw        = m2 - m4
     iv_raw = m2 - m4
+    
+    # 3) iv_norm       = sqrt(dot(iv_raw,iv_raw))
     iv_norm = np.sqrt(np.dot(iv_raw, iv_raw))
+    
+    # 4) iv            = iv_raw / iv_norm
     iv = iv_raw / iv_norm
-
+    
+    #  # 5) jvbar         = m3 - m1
     jvbar = m3 - m1
-
+    
+    # 6) nv_raw        = cross(iv, jvbar)
     nv_raw = _cross(iv, jvbar)
-    nv_norm = np.sqrt(np.dot(nv_raw, nv_raw))
-    nv = nv_raw / nv_norm
+    # 7 and 8, nv = nv / _sqrt(np.sum(nv*nv, axis=0, keepdims=True)) 
+    nv_norm = np.sqrt(np.dot(nv_raw, nv_raw)) # 7
+    nv = nv_raw / nv_norm # 8
 
     jv = _cross(nv, iv)
 
@@ -104,7 +140,7 @@ def panel_geometry_one_forward(corners):
     xi = np.array([np.dot(d[k], iv) for k in range(4)])
     eta = np.array([np.dot(d[k], jv) for k in range(4)])
 
-    xi_next = xi[list(IP1)]
+    xi_next = xi[list(IP1)] # the next corner around the quad aka read xi at a shuffled set of indices.
     eta_next = eta[list(IP1)]
 
     dxi = xi_next - xi
@@ -122,6 +158,8 @@ def panel_geometry_one_forward(corners):
 
     center = center0 + iv*xic + jv*etac
 
+    # cache every intermediate, hand-derived `result'
+    # backward pass will consume them in exact reverse order 
     cache = dict(c0=c0, c1=c1, c2=c2, c3=c3, m1=m1, m2=m2, m3=m3, m4=m4,
                  iv_raw=iv_raw, iv_norm=iv_norm, iv=iv, jvbar=jvbar,
                  nv_raw=nv_raw, nv_norm=nv_norm, nv=nv, jv=jv,
@@ -139,6 +177,38 @@ def panel_geometry_one_forward(corners):
 
 def panel_geometry_one_backward(cache, d_center, d_coordsys, d_cornerslocal, d_area):
     """
+    
+    why are all array inputs float arrays?  
+     - is there no more integer mapping between panels and vertices needed?
+
+    Parameters
+    ----------
+    cache : dict
+        cache of every intermmediate result from the fwd pass
+    d_center : numpy.ndarray
+        the centroid of this panel in (x,y,z) global coordinates
+    d_coordsys : numpy.ndarray [3x3]
+        the local coordinate system on this panel, in terms of 3 float vectors: (iv, jv, nv)
+        note: column oriented vectors iv, etc. in (iv, jv, nv)
+    d_cornerslocal : numpy.ndarray [2x4]
+        xi, eta coordinates of this panel computed in fwd mode
+    d_area : float
+        the area of this panel.
+
+    Returns
+    -------
+    TYPE
+        DESCRIPTION.
+    TYPE
+        DESCRIPTION.
+    TYPE
+        DESCRIPTION.
+    TYPE
+        DESCRIPTION.
+    
+    
+    
+    
     GENERAL RULE THAT EXPLAINS EVERY += IN THIS FUNCTION: whenever a forward
     variable was used in more than one place (fed more than one downstream
     expression), its adjoint must be the SUM of the adjoint contributions
@@ -155,6 +225,7 @@ def panel_geometry_one_backward(cache, d_center, d_coordsys, d_cornerslocal, d_a
     7e-15, which is the actual evidence every path below is accounted for
     exactly once, not a hopeful assumption.
     """
+    # pull the cache into locals
     iv, jv, nv = cache['iv'], cache['jv'], cache['nv']
     iv_raw, nv_raw = cache['iv_raw'], cache['nv_raw']
     iv_norm, nv_norm = cache['iv_norm'], cache['nv_norm']
@@ -170,6 +241,9 @@ def panel_geometry_one_backward(cache, d_center, d_coordsys, d_cornerslocal, d_a
     # column stack) -- so its adjoint is just a slice-copy into three
     # separate accumulators. These three (d_iv, d_jv, d_nv) are what steps
     # 21, 13, 9, 6 below will keep adding more contributions into.
+    #
+    # these three were never altered after step 10 in fwd mode.  
+    #
     d_iv = d_coordsys[:, 0].copy()
     d_jv = d_coordsys[:, 1].copy()
     d_nv = d_coordsys[:, 2].copy()
