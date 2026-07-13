@@ -55,7 +55,7 @@ class Node:
       - grad: adjoint accumulated during backward pass
     """
     val: float
-    parents: List[Tuple["Node", float]]
+    parents: List[Tuple["Node", float]]  # a node.parents = [(x,4.0), (y,3.0)] says that "one of my parents is node x; my local sesititity to that parent is 5.0"
     grad: float = 0.0 # note!: this is not the grad of this node.  
     # This grad says:
     # if this node wiggles a little, 
