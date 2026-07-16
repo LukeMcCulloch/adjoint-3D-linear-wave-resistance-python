@@ -232,8 +232,6 @@ def panel_geometry_one_backward(cache, d_center, d_coordsys, d_cornerslocal, d_a
     4 3-vectors:
         
         
-        
-        
     d_c0 : numpy.ndarray, shape (3,)
         dL/d(corner_0) -- gradient of the loss w.r.t. corner 0's global
         (x,y,z) position, summed over every path corner 0 feeds (its own

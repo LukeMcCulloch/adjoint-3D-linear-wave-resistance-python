@@ -70,6 +70,41 @@ edges -- once as "xk" in its own edge, once as "xk2" in the previous edge)
 so their adjoints are accumulators that only get read once the edge loop
 has fully finished writing into them -- exactly the `iv`/`jv` pattern from
 panel_geometry, just with edges standing in for the loop over k.
+
+BRANCH COVERAGE (checked 2026-07-15, not just assumed): each edge's cache
+dict carries three flags -- `active` (passed the degenerate-edge and
+num/den guards, step 3c/3f), `fires_atan` (passed the |denom|>1e-30 guard,
+step 3l), `m_is_const` (took the |edx|<1e-30 literal-m branch, step 3i) --
+and the backward pass follows whichever path forward actually took (see
+module docstring's "why THREE separate flags" discussion). Real mesh data
+(fifi.dat, the ROW=0/COL=50 pair used below) exercises NONE of the
+off-path branches -- every edge comes out active=True, fires_atan=True,
+m_is_const=False. That was flagged as an honest gap, then closed with
+synthetic (non-mesh) inputs built specifically to force each flag the
+other way -- see `if __name__ == "__main__"` below.
+
+Two genuinely different failure modes showed up, worth telling apart:
+  - `active=False` (edge length below eps): the naive synthetic test first
+    FAILED against FD by ~5e-2 -- but shrinking the FD step from 1e-6 to
+    1e-8 made the error drop to ~5e-9 (machine precision) before rising
+    again from ordinary roundoff at smaller steps. That V-shaped
+    error-vs-step curve is the signature of an FD step simply being too
+    big relative to a REAL BUT FINITE gap (edge length ~1.1e-9 here) to
+    the eps=1e-6 threshold -- not a bug, just FD needing to be tightened.
+  - `fires_atan=False` (z=0 exactly) and `m_is_const=True` (edx=0 exactly)
+    FAILED against FD by ~1e-2, and stayed exactly flat across eps from
+    1e-6 down to 1e-15 -- no V-shape at all. That flat curve means FD is
+    structurally incapable of seeing these branches: z=0 and edx=0 are
+    EXACT, isolated points, so central differences (which never evaluate
+    AT the base point, only at base+/-eps) always land on the OTHER
+    branch on both sides, no matter how small eps gets. FD cannot
+    validate a function at an exact branch boundary, full stop -- the fix
+    is switching the ground truth, not shrinking eps: compared against
+    revad's Node-based `jacobian()` on the same synthetic input instead
+    (which branches on the same `.val` the hand-derived code does, so the
+    two agree on which path was taken, by construction) -- match to
+    1.0e-17 and 2.3e-17 respectively, confirming both were correct all
+    along and FD was simply the wrong tool at those two exact points.
 """
 import os
 import sys
@@ -459,3 +494,51 @@ if __name__ == "__main__":
     for lab, hv, ov in zip(labels, worst[1], worst[2]):
         flag = "  <-- worst" if abs(hv - ov) == max_abs_err else ""
         print(f"  {lab:<14} hand={hv:>16.8e}  oracle={ov:>16.8e}{flag}")
+
+    # =========================================================================
+    # Branch coverage: real mesh data (above) never exercises active=False,
+    # fires_atan=False, or m_is_const=True -- see module docstring's "BRANCH
+    # COVERAGE" section for why FD can't validate the latter two (z=0 and
+    # edx=0 are exact, isolated branch boundaries; FD's central-difference
+    # probes always land on the OTHER branch, no matter the step size). The
+    # revad oracle branches on the same `.val` the hand-derived code does, so
+    # it's the correct ground truth here, not FD.
+    # =========================================================================
+    print("\n" + "="*70)
+    print("Branch-coverage checks (synthetic inputs, vs. revad oracle)")
+    print("="*70)
+
+    identity = np.eye(3)
+
+    def check_branch_case(name, fp, ctr, csy, cl):
+        v_c, cache_c = hs_influence_forward(fp, ctr, csy, cl)
+        flags = [(e['k'], e['active'], e.get('fires_atan'), e.get('m_is_const')) for e in cache_c['edges']]
+        x0_c = pack(fp, ctr, csy, cl)
+        J_oracle_c = jacobian(run_traced, x0_c)
+        J_hand_c = np.zeros((3, 23))
+        for o in range(3):
+            seed = [1.0 if i == o else 0.0 for i in range(3)]
+            d_fp, d_ctr, d_csy, d_cl = hs_influence_backward(cache_c, *seed)
+            J_hand_c[o, :] = np.concatenate([d_fp, d_ctr, d_csy.ravel(), d_cl.ravel()])
+        err_c = np.max(np.abs(J_hand_c - J_oracle_c))
+        print(f"{name}")
+        print(f"  edge flags (k, active, fires_atan, m_is_const): {flags}")
+        print(f"  max |hand - revad oracle|: {err_c:.3e}")
+
+    # active=False on edge 0 (near-degenerate edge, length ~1.1e-9)
+    check_branch_case(
+        "active=False (degenerate edge 0)",
+        np.array([0.35, 0.42, 0.55]), np.array([0.0, 0.0, 0.0]), identity,
+        np.array([[0.0, 1e-9, 1.2, -0.1], [0.0, 5e-10, 1.3, 1.0]]))
+
+    # fires_atan=False on all edges (field point exactly coplanar with source panel, z=0)
+    check_branch_case(
+        "fires_atan=False (z=0, in-plane field point)",
+        np.array([2.3, 2.4, 0.0]), np.array([0.0, 0.0, 0.0]), identity,
+        np.array([[0.0, 1.0, 1.0, 0.0], [0.0, 0.0, 1.0, 1.0]]))
+
+    # m_is_const=True on edges with a vertical (edx=0 exactly) local edge
+    check_branch_case(
+        "m_is_const=True (edx=0 exactly)",
+        np.array([2.3, 2.4, 0.5]), np.array([0.0, 0.0, 0.0]), identity,
+        np.array([[0.0, 0.0, 1.0, 1.0], [0.0, 1.0, 1.0, 0.0]]))
