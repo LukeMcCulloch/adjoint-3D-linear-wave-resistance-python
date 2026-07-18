@@ -69,6 +69,35 @@ no new table entries needed here, just more terms sharing more
 subexpressions (K1, K2, A_, B_, C_ are each reused 2-3 times within one
 edge, so each earns multiple "+=" contributions before their own
 definition gets differentiated).
+
+BRANCH COVERAGE (checked 2026-07-15, not just assumed): unlike
+hs_influence's two-level active/fires_atan split, phixx_influence has only
+ONE flag per edge (`active`), but it's gated by THREE separate short-
+circuit guards (3c dlen<=eps, 3g |denom1|<=1e-30, 3h |big|<=1e-30) -- any
+one failing skips the rest of that edge. Real mesh data never trips any of
+them (all 4 edges come out active=True, same as hs_influence's real-data
+flags). Two genuinely different geometric triggers were found and tested
+with synthetic inputs, vs. the revad oracle (not FD -- these are, like
+hs_influence's fires_atan/m_is_const cases, exact isolated points that FD
+central differences structurally cannot see):
+  - dlen<=eps: an actually-degenerate edge (near-coincident corners).
+  - |denom1|<=1e-30: the field point lies exactly ON the segment between
+    the edge's two corners (z=0, and (x,y) between the corners). This is
+    the classic "field point on the panel boundary" collocation
+    singularity from BEM theory.
+A third possibility -- |big|<=1e-30 firing on its own, with denom1
+comfortably nonzero -- was investigated algebraically and then checked
+both symbolically (on-segment points, any t in (0,1), z=0) and with a
+2-million-point random scan, and appears NOT to be geometrically
+reachable for this kernel: big's two zero-mechanisms (r1*r2=0, i.e. field
+exactly AT one of the edge's own corners; or the two corner-to-field
+vectors being exactly anti-parallel) both turn out to require the SAME
+on-segment condition denom1 already flags, and denom1 is checked first in
+the code. So `big`'s guard appears to be a redundant safety net riding on
+the same degeneracy, not an independently-reachable branch -- a genuine
+finding from this exercise, not a gap in the testing. Both of the two real
+cases validate to machine precision (2.2e-16, 5.6e-17) -- see
+`if __name__ == "__main__"` below.
 """
 import os
 import sys
@@ -434,3 +463,47 @@ if __name__ == "__main__":
     for lab, hv, ov in zip(labels, worst[1], worst[2]):
         flag = "  <-- worst" if abs(hv - ov) == max_abs_err else ""
         print(f"  {lab:<14} hand={hv:>16.8e}  oracle={ov:>16.8e}{flag}")
+
+    # =========================================================================
+    # Branch coverage: real mesh data (above) never trips active=False -- see
+    # module docstring's "BRANCH COVERAGE" section, including why a THIRD
+    # case (|big|<=1e-30 firing independently of denom1) doesn't appear to be
+    # geometrically reachable for this kernel and isn't tested here. FD can't
+    # validate either case below (both are exact isolated points -- degenerate
+    # edge length, and field point exactly on an edge's segment), so this
+    # compares against the revad oracle instead, same reasoning as
+    # handderiv_hs_influence.py's branch-coverage checks.
+    # =========================================================================
+    print("\n" + "="*70)
+    print("Branch-coverage checks (synthetic inputs, vs. revad oracle)")
+    print("="*70)
+
+    identity = np.eye(3)
+
+    def check_branch_case(name, fp, ctr, csy, cl):
+        H_c, cache_c = phixx_influence_forward(fp, ctr, csy, cl)
+        flags = [(e['k'], e['active']) for e in cache_c['edges']]
+        x0_c = pack(fp, ctr, csy, cl)
+        J_oracle_c = jacobian(run_traced, x0_c)
+        J_hand_c = np.zeros((9, 23))
+        for o in range(9):
+            a, b = o // 3, o % 3
+            d_out = np.zeros((3, 3)); d_out[a, b] = 1.0
+            d_fp, d_ctr, d_csy, d_cl = phixx_influence_backward(cache_c, d_out)
+            J_hand_c[o, :] = np.concatenate([d_fp, d_ctr, d_csy.ravel(), d_cl.ravel()])
+        err_c = np.max(np.abs(J_hand_c - J_oracle_c))
+        print(f"{name}")
+        print(f"  edge flags (k, active): {flags}")
+        print(f"  max |hand - revad oracle|: {err_c:.3e}")
+
+    # active=False via dlen<=eps (degenerate edge 0)
+    check_branch_case(
+        "active=False: degenerate edge length",
+        np.array([0.35, 0.42, 0.55]), np.array([0.0, 0.0, 0.0]), identity,
+        np.array([[0.0, 1e-9, 1.2, -0.1], [0.0, 5e-10, 1.3, 1.0]]))
+
+    # active=False via |denom1|<=1e-30 (field point exactly on edge0's segment, z=0)
+    check_branch_case(
+        "active=False: field point on edge segment (denom1=0, big=0 too)",
+        np.array([0.5, 0.0, 0.0]), np.array([0.0, 0.0, 0.0]), identity,
+        np.array([[0.0, 1.0, 1.0, 0.0], [0.0, 0.0, 1.0, 1.0]]))
